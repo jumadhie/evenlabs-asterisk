@@ -93,6 +93,16 @@ async function startApplication() {
         return;
       }
 
+      // Filter out internal AudioSocket utility channels (prevent infinite loop)
+      const args = event.args || [];
+      if (args.includes('audiosocket')) {
+        logger.debug('Ignoring internal AudioSocket channel', {
+          channelId: channel.id,
+          args: args
+        });
+        return;
+      }
+
       // Route to appropriate handler based on mode
       if (MODE === 'conversational_ai') {
         await handleCallConvAI(client, channel, event);
