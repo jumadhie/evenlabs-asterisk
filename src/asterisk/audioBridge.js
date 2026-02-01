@@ -12,6 +12,7 @@ const {
 class AudioBridge {
   constructor() {
     this.activeConnections = new Map();
+    this.rtpHandlerInstalled = false; // Track if global RTP handler is installed
   }
 
   /**
@@ -110,60 +111,12 @@ class AudioBridge {
     // Increase max listeners to prevent memory leak warning
     websocket.setMaxListeners(20);
 
-    // Create dedicated RTP message handler for THIS connection
-    const rtpMessageHandler = (msg, rinfo) => {
-      // RTP packet structure: 12 byte header + payload
-      if (msg.length < 12) {
-        return;
-      }
+    // Set up CENTRALIZED RTP routing (do this only ONCE globally)
+    this.ensureRTPHandler();
 
-      // Extract audio payload (skip RTP header)
-      const audioData = msg.slice(12);
-      
-      // Store RTP endpoint for sending back (first packet only)
-      if (!connection.rtpEndpoint) {
-        connection.rtpEndpoint = {
-          address: rinfo.address,
-          port: rinfo.port,
-        };
-        logger.info('RTP endpoint detected for connection', {
-          channelId: externalChannel.id,
-          endpoint: `${rinfo.address}:${rinfo.port}`,
-        });
-      }
-
-      // Send audio to ElevenLabs via WebSocket
-      if (websocket.readyState === 1) { // WebSocket.OPEN
-        try {
-          // ElevenLabs expects base64 encoded PCM 16kHz
-          const base64Audio = audioData.toString('base64');
-          
-          websocket.send(JSON.stringify({
-            user_audio_chunk: base64Audio,
-          }));
-
-          logger.debug('Audio sent to ElevenLabs', {
-            channelId: externalChannel.id,
-            bytes: audioData.length,
-          });
-        } catch (error) {
-          logger.warn('Failed to send audio to ElevenLabs', {
-            error: error.message,
-          });
-        }
-      }
-    };
-
-    // Attach RTP handler for this connection
-    if (!externalMediaManager.rtpServer) {
-      logger.failure('RTP server not initialized');
-      return;
-    }
-
-    externalMediaManager.rtpServer.on('message', rtpMessageHandler);
-    
-    // Store handler reference for cleanup
-    connection.rtpMessageHandler = rtpMessageHandler;
+    // Register this connection for RTP routing
+    // When RTP packets arrive, they'll be routed to the correct connection
+    connection.expectingRTP = true;
 
     // Handle audio FROM ElevenLabs TO Asterisk
     const messageHandler = (data) => {
@@ -236,15 +189,94 @@ class AudioBridge {
       websocket.removeListener('error', errorHandler);
       websocket.removeListener('close', closeHandler);
       
-      // Remove RTP handler
-      if (connection.rtpMessageHandler && externalMediaManager.rtpServer) {
-        externalMediaManager.rtpServer.removeListener('message', connection.rtpMessageHandler);
-      }
+      // Mark connection as not expecting RTP anymore
+      connection.expectingRTP = false;
     };
 
     websocket.on('message', messageHandler);
     websocket.on('error', errorHandler);
     websocket.on('close', closeHandler);
+  }
+
+  /**
+   * Ensure global RTP handler is set up (only once)
+   */
+  ensureRTPHandler() {
+    if (this.rtpHandlerInstalled) {
+      return;
+    }
+
+    this.rtpHandlerInstalled = true;
+
+    logger.info('Installing centralized RTP handler');
+
+    externalMediaManager.rtpServer.on('message', (msg, rinfo) => {
+      // RTP packet structure: 12 byte header + payload
+      if (msg.length < 12) {
+        return;
+      }
+
+      // Extract audio payload
+      const audioData = msg.slice(12);
+      
+      // Find which connection this RTP packet belongs to
+      let targetConnection = null;
+
+      for (const [channelId, conn] of this.activeConnections.entries()) {
+        if (!conn.expectingRTP) {
+          continue;
+        }
+
+        // If RTP endpoint not yet detected, this could be the first packet
+        if (!conn.rtpEndpoint) {
+          // Associate this connection with this RTP source
+          conn.rtpEndpoint = {
+            address: rinfo.address,
+            port: rinfo.port,
+          };
+          targetConnection = conn;
+          
+          logger.info('RTP endpoint detected and associated', {
+            channelId: conn.externalChannel.id,
+            endpoint: `${rinfo.address}:${rinfo.port}`,
+          });
+          break;
+        }
+        
+        // Check if packet is from this connection's endpoint
+        if (conn.rtpEndpoint.address === rinfo.address && 
+            conn.rtpEndpoint.port === rinfo.port) {
+          targetConnection = conn;
+          break;
+        }
+      }
+
+      if (!targetConnection) {
+        // Orphan packet - no connection found
+        return;
+      }
+
+      // Send audio to ElevenLabs for this specific connection
+      if (targetConnection.websocket && targetConnection.websocket.readyState === 1) {
+        try {
+          const base64Audio = audioData.toString('base64');
+          
+          targetConnection.websocket.send(JSON.stringify({
+            user_audio_chunk: base64Audio,
+          }));
+
+          logger.debug('Audio routed to ElevenLabs', {
+            channelId: targetConnection.externalChannel.id,
+            bytes: audioData.length,
+          });
+        } catch (error) {
+          logger.warn('Failed to send audio to ElevenLabs', {
+            error: error.message,
+            channelId: targetConnection.externalChannel.id,
+          });
+        }
+      }
+    });
   }
 
   /**
