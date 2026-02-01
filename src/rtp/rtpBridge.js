@@ -1,5 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
+const config = require('../config/config');
+const alawmulaw = require('alawmulaw');
 const { createConversation, endConversation } = require('../elevenlabs/conversationalAI');
 
 /**
@@ -137,7 +139,7 @@ class RTPBridge {
 
     // Handle incoming audio from Asterisk (via RTP)
     // Handle incoming audio from Asterisk (via RTP)
-    this.rtpServer.on('audio', (sid, pcm8k) => {
+    this.rtpServer.on('audio', (sid, pcm8k, rawPayload) => {
       if (sid !== sessionId) return;
 
       // prevent echo/hallucinations: ignore user audio while agent is speaking
@@ -145,21 +147,33 @@ class RTPBridge {
         return;
       }
 
-      // Upsample 8kHz → 16kHz for ElevenLabs
-      const pcm16k = upsample8to16(pcm8k);
+      let base64Audio;
+      let outputBytes;
+
+      const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
+
+      if (audioMode === 'ulaw_8000' && rawPayload) {
+        // Optimization: Pass raw μ-law directly
+        base64Audio = rawPayload.toString('base64');
+        outputBytes = rawPayload.length;
+      } else {
+        // Default: Upsample 8kHz → 16kHz for ElevenLabs PCM
+        const pcm16k = upsample8to16(pcm8k);
+        base64Audio = pcm16k.toString('base64');
+        outputBytes = pcm16k.length;
+      }
 
       // Send to ElevenLabs via WebSocket
       if (websocket && websocket.readyState === 1) {
-        const base64Audio = pcm16k.toString('base64');
-        
         websocket.send(JSON.stringify({
           user_audio_chunk: base64Audio,
         }));
 
         logger.debug('Audio sent to ElevenLabs', {
           sessionId,
+          mode: audioMode,
           inputBytes: pcm8k.length,
-          outputBytes: pcm16k.length,
+          outputBytes: outputBytes,
         });
       }
     });
@@ -191,18 +205,23 @@ class RTPBridge {
 
         // Handle audio from ElevenLabs
         if (message.audio_event?.audio_base_64) {
-          const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
+          // Handle audio based on configured mode
+          const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
+          let pcm8k;
 
-          logger.info('🎵 Audio received from ElevenLabs', {
-            sessionId,
-            bytes: pcm16k.length,
-          });
-
-          // Set speaking state ON
-          session.isAgentSpeaking = true;
-
-          // Downsample 16kHz → 8kHz for Asterisk
-          const pcm8k = downsample16to8(pcm16k);
+          if (audioMode === 'ulaw_8000') {
+            // Case: ulaw_8000 (raw μ-law bytes)
+            // Need to decode to PCM 8kHz because rtpServer expects PCM input (it re-encodes)
+            // TODO: Optimization - Add rtpServer.sendRawAudio() to avoid decode/encode cycle
+             const ulawData = Buffer.from(message.audio_event.audio_base_64, 'base64');
+             const decoded = alawmulaw.mulaw.decode(ulawData);
+             pcm8k = Buffer.from(decoded.buffer);
+          } else {
+             // Case: pcm_16000 (PCM 16kHz)
+             // Default behavior: Downsample 16kHz → 8kHz
+             const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
+             pcm8k = downsample16to8(pcm16k);
+          }
 
           // Send audio in chunks - 160 bytes per RTP packet (20ms at 8kHz)
           // PCM 8kHz mono 16-bit = 8000 samples/sec * 2 bytes = 16000 bytes/sec
