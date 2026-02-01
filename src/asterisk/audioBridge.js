@@ -30,16 +30,14 @@ class AudioBridge {
         agentId,
       });
 
-      // 1. Create ElevenLabs conversation
+      // 1. Create ElevenLabs conversation (with WebSocket)
       const conversation = await createConversation(agentId);
       const conversationId = conversation.conversation_id;
+      const ws = conversation.websocket;
 
       logger.success('ElevenLabs conversation created', {
         conversationId,
       });
-
-      // 2. Connect to ElevenLabs WebSocket
-      const ws = await connectToConversation(conversationId);
 
       // 3. Create ExternalMedia channel for RTP
       const externalChannel = await externalMediaManager.createExternalMedia(

@@ -4,9 +4,10 @@ const config = require('../config/config');
 const logger = require('../utils/logger');
 
 /**
- * Initialize a new conversation with ElevenLabs Conversational AI
+ * Initialize a new conversation with ElevenLabs Conversational AI 
+ * NEW APPROACH: Connect directly via WebSocket with agent_id
  * @param {string} agentId - Optional agent ID (uses config default if not provided)
- * @returns {Promise<Object>} - Conversation details including conversation_id
+ * @returns {Promise<Object>} - Conversation details including websocket
  */
 async function createConversation(agentId = null) {
   const agent = agentId || config.elevenlabs.agentId;
@@ -15,30 +16,25 @@ async function createConversation(agentId = null) {
     throw new Error('Agent ID is required for conversational AI');
   }
 
-  const url = 'https://api.elevenlabs.io/v1/convai/conversation';
-
   logger.elevenlabs('Creating new conversation', { agentId: agent });
 
   try {
-    const response = await axios({
-      method: 'POST',
-      url: url,
-      headers: {
-        'xi-api-key': config.elevenlabs.apiKey,
-        'Content-Type': 'application/json',
-      },
-      data: {
-        agent_id: agent,
-      },
-      timeout: config.timeouts.api,
-    });
+    // Connect directly to agent via WebSocket (no separate conversation creation)
+    const ws = await connectToAgent(agent);
+    
+    // Generate a local conversation ID for tracking
+    const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     logger.success('Conversation created', {
-      conversationId: response.data.conversation_id,
+      conversationId,
       agentId: agent,
     });
 
-    return response.data;
+    return {
+      conversation_id: conversationId,
+      agent_id: agent,
+      websocket: ws,
+    };
   } catch (error) {
     logger.failure('Failed to create conversation', {
       error: error.message,
@@ -50,43 +46,55 @@ async function createConversation(agentId = null) {
 }
 
 /**
- * Connect to conversation via WebSocket for real-time audio streaming
- * @param {string} conversationId - Conversation ID from createConversation
+ * Connect directly to ElevenLabs agent via WebSocket
+ * @param {string} agentId - ElevenLabs agent ID
  * @returns {Promise<WebSocket>} - WebSocket connection
  */
-async function connectToConversation(conversationId) {
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation/${conversationId}?api_key=${config.elevenlabs.apiKey}`;
+async function connectToAgent(agentId) {
+  // Direct WebSocket connection to agent
+  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${agentId}`;
 
-  logger.elevenlabs('Connecting to conversation WebSocket', {
-    conversationId,
+  logger.elevenlabs('Connecting to agent WebSocket', {
+    agentId,
   });
 
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl, {
+      headers: {
+        'xi-api-key': config.elevenlabs.apiKey,
+      },
+    });
+
+    let connectionTimeout = setTimeout(() => {
+      ws.close();
+      reject(new Error('WebSocket connection timeout'));
+    }, 10000);
 
     ws.on('open', () => {
-      logger.success('WebSocket connection established', { conversationId });
+      clearTimeout(connectionTimeout);
+      logger.success('WebSocket connection established', { agentId });
       resolve(ws);
     });
 
     ws.on('error', (error) => {
+      clearTimeout(connectionTimeout);
       logger.failure('WebSocket error', {
         error: error.message,
-        conversationId,
+        agentId,
       });
       reject(error);
     });
 
     ws.on('message', (data) => {
       logger.debug('WebSocket message received', {
-        conversationId,
+        agentId,
         dataLength: data.length,
       });
     });
 
     ws.on('close', (code, reason) => {
       logger.info('WebSocket connection closed', {
-        conversationId,
+        agentId,
         code,
         reason: reason.toString(),
       });
@@ -174,7 +182,6 @@ async function getConversationHistory(conversationId) {
 
 module.exports = {
   createConversation,
-  connectToConversation,
   sendAudio,
   endConversation,
   getConversationHistory,
