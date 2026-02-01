@@ -111,7 +111,8 @@ class RTPServer extends EventEmitter {
   sendAudio(sessionId, pcmAudio) {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      logger.error('RTP session not found', { sessionId });
+      // Common during hangup/cleanup race condition
+      logger.debug('RTP session not found (packet dropped)', { sessionId });
       return false;
     }
 

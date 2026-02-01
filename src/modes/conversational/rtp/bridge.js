@@ -202,6 +202,8 @@ class RTPBridge {
         const startTime = Date.now();
 
         const sendNextChunk = () => {
+             if (session.isClosed) return;
+
              // Check if we have enough data left
              if (!session.audioBuffer || offset + CHUNK_SIZE > session.audioBuffer.length) {
                  // Buffer underrun or end of stream
@@ -343,6 +345,10 @@ class RTPBridge {
 
         // End ElevenLabs conversation
         endConversation(session.conversationId);
+
+        // Mark session as closed to stop playback loop
+        session.isClosed = true;
+        session.isPlaying = false;
 
         // Close RTP session
         this.rtpServer.closeSession(sessionId);
