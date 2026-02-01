@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const externalMediaManager = require('./externalMedia');
+const { upsample8to16, downsample16to8, ulawToPcm, pcmToUlaw } = require('../utils/audioResampler');
 const { 
   createConversation, 
   connectToConversation,
@@ -124,30 +125,38 @@ class AudioBridge {
         const message = JSON.parse(data.toString());
 
         if (message.audio) {
-          // Decode base64 audio from ElevenLabs
-          const audioBuffer = Buffer.from(message.audio, 'base64');
+          // Decode base64 audio from ElevenLabs (PCM 16kHz)
+          const pcm16k = Buffer.from(message.audio, 'base64');
 
           logger.debug('Audio received from ElevenLabs', {
             channelId: externalChannel.id,
-            bytes: audioBuffer.length,
+            bytes: pcm16k.length,
           });
 
           // Send to Asterisk via RTP if endpoint known
           if (connection.rtpEndpoint) {
+            // ElevenLabs sends PCM 16kHz, Asterisk expects ulaw 8kHz
+            // 1. Downsample from 16kHz to 8kHz
+            const pcm8k = downsample16to8(pcm16k);
+            
+            // 2. Convert PCM to ulaw
+            const ulawData = pcmToUlaw(pcm8k);
+
             connection.sequenceNumber = (connection.sequenceNumber + 1) % 65536;
-            connection.timestamp += audioBuffer.length / 2; // 16-bit samples
+            connection.timestamp += ulawData.length; // ulaw samples (1 byte each)
 
             externalMediaManager.sendAudio(
-              audioBuffer,
+              ulawData,
               connection.rtpEndpoint.address,
               connection.rtpEndpoint.port,
               connection.sequenceNumber,
               connection.timestamp
             );
 
-            logger.debug('Audio sent to Asterisk', {
+            logger.debug('Audio resampled and sent to Asterisk', {
               channelId: externalChannel.id,
-              bytes: audioBuffer.length,
+              inputBytes: pcm16k.length,
+              outputBytes: ulawData.length,
               seq: connection.sequenceNumber,
             });
           } else {
@@ -259,15 +268,24 @@ class AudioBridge {
       // Send audio to ElevenLabs for this specific connection
       if (targetConnection.websocket && targetConnection.websocket.readyState === 1) {
         try {
-          const base64Audio = audioData.toString('base64');
+          // Asterisk sends ulaw 8kHz, ElevenLabs expects PCM 16kHz
+          // 1. Convert ulaw to PCM (still 8kHz)
+          const pcm8k = ulawToPcm(audioData);
+          
+          // 2. Upsample from 8kHz to 16kHz
+          const pcm16k = upsample8to16(pcm8k);
+          
+          // 3. Send as base64
+          const base64Audio = pcm16k.toString('base64');
           
           targetConnection.websocket.send(JSON.stringify({
             user_audio_chunk: base64Audio,
           }));
 
-          logger.debug('Audio routed to ElevenLabs', {
+          logger.debug('Audio resampled and routed to ElevenLabs', {
             channelId: targetConnection.externalChannel.id,
-            bytes: audioData.length,
+            inputBytes: audioData.length,
+            outputBytes: pcm16k.length,
           });
         } catch (error) {
           logger.warn('Failed to send audio to ElevenLabs', {
