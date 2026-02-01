@@ -101,10 +101,6 @@ class RTPBridge {
         websocket: ws,
         userChannel,
         externalMediaChannel,
-        conversationId: null,
-        userChannel,
-        externalMediaChannel,
-        bridge,
         isAgentSpeaking: false, // Track agent speech state
       };
 
