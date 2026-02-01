@@ -81,12 +81,6 @@ async function connectToAgent(agentId) {
       const initMessage = {
         type: "conversation_initiation_client_data",
         conversation_config_override: {
-          agent: {
-            language: "en", 
-            prompt: {
-               // Inject system prompt reinforcement if needed
-            }
-          },
           tts: {
             output_audio_format: outputFormat
           }
