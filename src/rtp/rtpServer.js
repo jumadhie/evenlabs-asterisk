@@ -1,7 +1,7 @@
 const dgram = require('dgram');
 const EventEmitter = require('events');
 const logger = require('../utils/logger');
-const { ulaw } = require('alawmulaw');
+const alawmulaw = require('alawmulaw');
 
 /**
  * Simple RTP Server for audio streaming
@@ -73,7 +73,7 @@ class RTPServer extends EventEmitter {
     if (packet.length < 12) return;
 
     const payload = packet.slice(12);
-    const pcm = ulaw.decode(payload);
+    const pcm = alawmulaw.mulaw.decode(payload);
 
     logger.debug('RTP packet received', {
       sessionId,
@@ -97,7 +97,7 @@ class RTPServer extends EventEmitter {
     }
 
     // Encode PCM to PCMU using proper library
-    const pcmu = ulaw.encode(pcmAudio);
+    const pcmu = alawmulaw.mulaw.encode(pcmAudio);
 
     // Build RTP packet
     const packet = Buffer.alloc(12 + pcmu.length);
