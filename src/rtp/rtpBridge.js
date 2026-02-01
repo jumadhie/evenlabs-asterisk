@@ -215,49 +215,72 @@ class RTPBridge {
              pcm8k = downsample16to8(pcm16k);
           }
 
-          // Send audio in chunks - 160 bytes per RTP packet (20ms at 8kHz)
-          // PCM 8kHz mono 16-bit = 8000 samples/sec * 2 bytes = 16000 bytes/sec
-          // 20ms = 160 samples * 2 bytes = 320 bytes of PCM
-          const CHUNK_SIZE = 320; // 20ms of PCM at 8kHz 16-bit
-          const PACKET_INTERVAL = 20; // 20ms between packets
+          // Append to session audio buffer
+          if (!session.audioBuffer) {
+            session.audioBuffer = Buffer.alloc(0);
+          }
+          session.audioBuffer = Buffer.concat([session.audioBuffer, pcm8k]);
+          
+          // Start playback if not running
+          if (!session.isPlaying) {
+             startPlayback(session, this.rtpServer);
+          }
 
-          let offset = 0;
-          let packetCount = 0;
-
-          const sendNextChunk = () => {
-            if (offset >= pcm8k.length) {
-              logger.debug('Audio playback complete', {
-                sessionId,
-                totalPackets: packetCount,
-              });
-              // Set speaking state OFF after playback
-              session.isAgentSpeaking = false;
-              return;
-            }
-
-            const chunk = pcm8k.slice(offset, offset + CHUNK_SIZE);
-            this.rtpServer.sendAudio(sessionId, chunk);
-            offset += CHUNK_SIZE;
-            packetCount++;
-
-            // Calculate next scheduled time to compensate for drift
-            const elapsed = Date.now() - startTime;
-            const targetTime = packetCount * PACKET_INTERVAL;
-            const delay = Math.max(0, targetTime - elapsed);
-
-            setTimeout(sendNextChunk, delay);
-          };
-
-          // Start sending audio with drift compensation
-          const startTime = Date.now();
-          sendNextChunk();
-
-          logger.info('📤 Started audio playback to Asterisk', {
+          logger.info('🎵 Audio buffered', {
             sessionId,
-            totalBytes: pcm8k.length,
-            estimatedPackets: Math.ceil(pcm8k.length / CHUNK_SIZE),
-            estimatedDuration: Math.ceil(pcm8k.length / CHUNK_SIZE) * PACKET_INTERVAL + 'ms',
+            addedBytes: pcm8k.length,
+            totalBuffered: session.audioBuffer.length,
+            isPlaying: session.isPlaying
           });
+        }
+    });
+
+    // Helper: Sequential Playback with Drift Correction
+    const startPlayback = (session, rtpServer) => {
+        session.isPlaying = true;
+        session.isAgentSpeaking = true;
+        
+        let offset = 0;
+        let packetCount = 0;
+        const CHUNK_SIZE = 320; // 20ms @ 8kHz
+        const PACKET_INTERVAL = 20;
+        const startTime = Date.now();
+
+        const sendNextChunk = () => {
+             // Check if we have enough data left
+             if (offset + CHUNK_SIZE > session.audioBuffer.length) {
+                 // Buffer underrun or end of stream
+                 // Remove played portion
+                 session.audioBuffer = session.audioBuffer.slice(offset);
+                 
+                 if (session.audioBuffer.length === 0) {
+                     logger.debug('Playback queue drained/complete', { sessionId: session.sessionId });
+                     session.isPlaying = false;
+                     session.isAgentSpeaking = false; // Allow user to interrupt again
+                     return;
+                 }
+                 
+                 // If we have "some" data but less than a chunk, wait for more (Buffer Underrun protection)
+                 // But for now, let's just stop and wait for next trigger
+                 session.isPlaying = false;
+                 return;
+             }
+
+             const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
+             rtpServer.sendAudio(session.sessionId, chunk);
+             offset += CHUNK_SIZE;
+             packetCount++;
+
+             // Drift correction
+             const elapsed = Date.now() - startTime;
+             const targetTime = packetCount * PACKET_INTERVAL;
+             const delay = Math.max(0, targetTime - elapsed);
+             
+             setTimeout(sendNextChunk, delay);
+        };
+
+        sendNextChunk();
+    };
         }
 
         // Handle agent response text
