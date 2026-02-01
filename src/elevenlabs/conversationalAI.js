@@ -74,6 +74,28 @@ async function connectToAgent(agentId) {
       clearTimeout(connectionTimeout);
       logger.success('WebSocket connection established', { agentId });
       
+      // Dynamic configuration based on audio mode
+      const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
+      const outputFormat = audioMode === 'ulaw_8000' ? 'ulaw_8000' : 'pcm_16000';
+
+      const initMessage = {
+        type: "conversation_initiation_client_data",
+        conversation_config_override: {
+          agent: {
+            language: "en", 
+            prompt: {
+               // Inject system prompt reinforcement if needed
+            }
+          },
+          tts: {
+            output_audio_format: outputFormat
+          }
+        }
+      };
+      
+      ws.send(JSON.stringify(initMessage));
+      logger.info('Sent conversation initiation data', { agentId, outputFormat });
+
       logger.debug('WebSocket opened, waiting for messages...');
       
       resolve(ws);
