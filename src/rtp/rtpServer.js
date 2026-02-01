@@ -73,7 +73,12 @@ class RTPServer extends EventEmitter {
     if (packet.length < 12) return;
 
     const payload = packet.slice(12);
-    const pcm = alawmulaw.mulaw.decode(payload);
+    
+    // Decode PCMU to PCM - alawmulaw returns Uint8Array of 16-bit samples
+    const decoded = alawmulaw.mulaw.decode(payload);
+    
+    // Convert to Buffer for compatibility with resampling
+    const pcm = Buffer.from(decoded.buffer);
 
     logger.debug('RTP packet received', {
       sessionId,
