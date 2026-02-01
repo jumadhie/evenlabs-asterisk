@@ -24,7 +24,26 @@ async function startApplication() {
     mode: MODE.toUpperCase(),
   });
 
+  // Temporary handler for ari-client Swagger errors
+  let swaggerErrorCaught = false;
+  const tempSwaggerHandler = (error) => {
+    const errorStr = String(error);
+    if (errorStr.includes('api-docs') || errorStr.includes('swagger')) {
+      logger.warn('Caught Swagger API docs error (non-critical)', {
+        error: errorStr.substring(0, 200),
+      });
+      swaggerErrorCaught = true;
+      // Don't exit - this is non-critical
+      return;
+    }
+    // Re-throw other errors
+    throw error;
+  };
+
   try {
+    // Install temporary handler
+    process.on('uncaughtException', tempSwaggerHandler);
+
     // Start audio file server (for TTS mode)
     if (MODE === 'tts') {
       audioFileServer.start();
@@ -39,6 +58,17 @@ async function startApplication() {
     
     // Connect to Asterisk ARI
     const client = await ariClient.connect();
+
+    // Remove temporary handler after connection
+    process.removeListener('uncaughtException', tempSwaggerHandler);
+
+    // Install permanent handler
+    installUncaughtExceptionHandler();
+
+    // If Swagger error occurred but we still connected, log it
+    if (swaggerErrorCaught && client) {
+      logger.success('Connected despite Swagger warning');
+    }
 
     logger.success('Application started successfully');
     logger.info(`📞 Listening for calls on Stasis app: ${config.asterisk.appName}`);
@@ -131,29 +161,34 @@ async function shutdown(signal) {
   }
 }
 
+/**
+ * Install permanent uncaught exception handler
+ */
+function installUncaughtExceptionHandler() {
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (error) => {
+    console.error('UNCAUGHT EXCEPTION:', error);
+    logger.failure('Uncaught exception', {
+      error: error.message || String(error),
+      stack: error.stack,
+      type: error.constructor?.name,
+      fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+    });
+    process.exit(1);
+  });
+
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.failure('Unhandled promise rejection', {
+      reason,
+      promise,
+    });
+  });
+}
+
 // Handle process signals
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('UNCAUGHT EXCEPTION:', error);
-  logger.failure('Uncaught exception', {
-    error: error.message || String(error),
-    stack: error.stack,
-    type: error.constructor?.name,
-    fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
-  });
-  process.exit(1);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  logger.failure('Unhandled promise rejection', {
-    reason,
-    promise,
-  });
-});
 
 // Start the application
 startApplication();
