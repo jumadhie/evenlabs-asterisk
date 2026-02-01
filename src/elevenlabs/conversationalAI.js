@@ -105,6 +105,10 @@ async function connectToAgent(agentId) {
       // Let's send a config update just in case it's needed/supported
       // WS connection URL params are also a place this might be set.
       
+      // Send the initialization message
+      ws.send(JSON.stringify(initMessage));
+      logger.info('Sent conversation initiation data', { agentId });
+
       logger.debug('WebSocket opened, waiting for messages...');
       
       resolve(ws);
