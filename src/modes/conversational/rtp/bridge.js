@@ -1,8 +1,8 @@
 const { v4: uuidv4 } = require('uuid');
-const logger = require('../utils/logger');
-const config = require('../config/config');
+const logger = require('../../../utils/logger');
+const config = require('../../../config/config');
 const alawmulaw = require('alawmulaw');
-const { createConversation, endConversation } = require('../elevenlabs/conversationalAI');
+const { createConversation, endConversation } = require('../elevenlabs');
 
 /**
  * Audio sample rate conversion utilities

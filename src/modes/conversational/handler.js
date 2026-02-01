@@ -1,6 +1,6 @@
-const logger = require('../utils/logger');
-const config = require('../config/config');
-const audioBridge = require('./rtpBridge'); // Use RTP bridge instead of AudioSocket
+const logger = require('../../utils/logger');
+const config = require('../../config/config');
+const audioBridge = require('./bridgeWrapper'); // Use RTP bridge wrapper
 // const externalMediaManager = require('./externalMedia'); // Deprecated
 
 /**

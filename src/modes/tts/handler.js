@@ -1,7 +1,9 @@
-const logger = require('../utils/logger');
-const { generateSpeech } = require('../elevenlabs/tts');
-const { convertToAsteriskFormat, cleanupAudioFiles } = require('../utils/audioConverter');
-const config = require('../config/config');
+const logger = require('../../utils/logger');
+const config = require('../../config/config');
+const { generateSpeech } = require('./elevenlabs');
+const audioFileServer = require('./fileServer');
+const path = require('path');
+const fs = require('fs');
 
 /**
  * Handle incoming call

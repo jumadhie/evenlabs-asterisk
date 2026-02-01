@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
-const config = require('../config/config');
-const logger = require('../utils/logger');
+const config = require('../../config/config');
+const logger = require('../../utils/logger');
 
 class AudioFileServer {
   constructor() {

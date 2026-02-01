@@ -1,7 +1,7 @@
 const axios = require('axios');
 const WebSocket = require('ws');
-const config = require('../config/config');
-const logger = require('../utils/logger');
+const config = require('../../config/config');
+const logger = require('../../utils/logger');
 
 /**
  * Initialize a new conversation with ElevenLabs Conversational AI 

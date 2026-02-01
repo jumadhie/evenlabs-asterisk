@@ -1,6 +1,6 @@
-const ari = require('ari-client');
-const config = require('../config/config');
-const logger = require('../utils/logger');
+const client = require('ari-client');
+const config = require('../../config/config');
+const logger = require('../../utils/logger');
 
 class AsteriskARIClient {
   constructor() {

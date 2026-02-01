@@ -1,8 +1,8 @@
 const axios = require('axios');
-const fs = require('fs').promises;
+const fs = require('fs');
 const path = require('path');
-const config = require('../config/config');
-const logger = require('../utils/logger');
+const logger = require('../../utils/logger');
+const config = require('../../config/config');
 
 /**
  * Generate speech audio from text using ElevenLabs TTS

@@ -1,9 +1,9 @@
-const ariClient = require('./asterisk/ariClient');
-const { handleCall } = require('./asterisk/callHandler');
-const { handleCallConvAI } = require('./asterisk/callHandlerConvAI');
+const ariClient = require('./core/asterisk/ari');
+const { handleCall } = require('./modes/tts/handler');
+const { handleCallConvAI } = require('./modes/conversational/handler');
 const logger = require('./utils/logger');
 const config = require('./config/config');
-const audioFileServer = require('./utils/audioFileServer');
+const audioFileServer = require('./modes/tts/fileServer');
 
 
 // Determine mode: 'tts' or 'conversational_ai'
@@ -51,8 +51,8 @@ async function startApplication() {
     
     // Initialize RTP server and bridge (for ConvAI mode)
     if (MODE === 'conversational_ai') {
-      const RTPServer = require('./rtp/rtpServer');
-      const RTPBridge = require('./rtp/rtpBridge');
+      const RTPServer = require('./modes/conversational/rtp/server');
+      const RTPBridge = require('./modes/conversational/rtp/bridge');
       
       // Create RTP server (ports 10000-10100)
       const rtpServer = new RTPServer(10000, 10100);
@@ -61,7 +61,7 @@ async function startApplication() {
       const rtpBridge = new RTPBridge(rtpServer);
       
       // Export for handler access
-      require('./asterisk/rtpBridge').instance = rtpBridge;
+      require('./modes/conversational/bridgeWrapper').instance = rtpBridge;
       
       logger.success('RTP server initialized', {
         portRange: '10000-10100',
@@ -158,7 +158,7 @@ async function shutdown(signal) {
   try {
     // Cleanup audio bridges (ConvAI mode)
     if (MODE === 'conversational_ai') {
-        const rtpBridge = require('./asterisk/rtpBridge');
+        const rtpBridge = require('./modes/conversational/bridgeWrapper');
         await rtpBridge.shutdown(); 
     }
     
