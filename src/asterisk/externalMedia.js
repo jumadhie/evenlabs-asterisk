@@ -34,6 +34,8 @@ class ExternalMediaManager {
         app: config.asterisk.appName,
         external_host: `${externalHost}:${externalPort}`,
         format: 'ulaw', // 8kHz ulaw for compatibility with most softphones
+        encapsulation: 'rtp', // Use RTP encapsulation
+        direction: 'both', // Enable bidirectional audio
       });
 
       logger.success('ExternalMedia channel created', {
