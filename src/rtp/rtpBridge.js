@@ -178,6 +178,53 @@ class RTPBridge {
     const { websocket, sessionId } = session;
     let { conversationId } = session;
 
+    // Helper: Sequential Playback with Drift Correction
+    const startPlayback = (session, rtpServer) => {
+        session.isPlaying = true;
+        session.isAgentSpeaking = true;
+        
+        let offset = 0;
+        let packetCount = 0;
+        const CHUNK_SIZE = 320; // 20ms @ 8kHz
+        const PACKET_INTERVAL = 20;
+        const startTime = Date.now();
+
+        const sendNextChunk = () => {
+             // Check if we have enough data left
+             if (!session.audioBuffer || offset + CHUNK_SIZE > session.audioBuffer.length) {
+                 // Buffer underrun or end of stream
+                 // Remove played portion
+                 if (session.audioBuffer) {
+                    session.audioBuffer = session.audioBuffer.slice(offset);
+                 }
+                 
+                 if (!session.audioBuffer || session.audioBuffer.length === 0) {
+                     logger.debug('Playback queue drained/complete', { sessionId: session.sessionId });
+                     session.isPlaying = false;
+                     session.isAgentSpeaking = false; 
+                     return;
+                 }
+                 
+                 session.isPlaying = false;
+                 return;
+             }
+
+             const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
+             rtpServer.sendAudio(session.sessionId, chunk);
+             offset += CHUNK_SIZE;
+             packetCount++;
+
+             // Drift correction
+             const elapsed = Date.now() - startTime;
+             const targetTime = packetCount * PACKET_INTERVAL;
+             const delay = Math.max(0, targetTime - elapsed);
+             
+             setTimeout(sendNextChunk, delay);
+        };
+
+        sendNextChunk();
+    };
+
     websocket.on('message', (data) => {
       try {
         const message = JSON.parse(data);
@@ -232,55 +279,6 @@ class RTPBridge {
             totalBuffered: session.audioBuffer.length,
             isPlaying: session.isPlaying
           });
-        }
-    });
-
-    // Helper: Sequential Playback with Drift Correction
-    const startPlayback = (session, rtpServer) => {
-        session.isPlaying = true;
-        session.isAgentSpeaking = true;
-        
-        let offset = 0;
-        let packetCount = 0;
-        const CHUNK_SIZE = 320; // 20ms @ 8kHz
-        const PACKET_INTERVAL = 20;
-        const startTime = Date.now();
-
-        const sendNextChunk = () => {
-             // Check if we have enough data left
-             if (offset + CHUNK_SIZE > session.audioBuffer.length) {
-                 // Buffer underrun or end of stream
-                 // Remove played portion
-                 session.audioBuffer = session.audioBuffer.slice(offset);
-                 
-                 if (session.audioBuffer.length === 0) {
-                     logger.debug('Playback queue drained/complete', { sessionId: session.sessionId });
-                     session.isPlaying = false;
-                     session.isAgentSpeaking = false; // Allow user to interrupt again
-                     return;
-                 }
-                 
-                 // If we have "some" data but less than a chunk, wait for more (Buffer Underrun protection)
-                 // But for now, let's just stop and wait for next trigger
-                 session.isPlaying = false;
-                 return;
-             }
-
-             const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
-             rtpServer.sendAudio(session.sessionId, chunk);
-             offset += CHUNK_SIZE;
-             packetCount++;
-
-             // Drift correction
-             const elapsed = Date.now() - startTime;
-             const targetTime = packetCount * PACKET_INTERVAL;
-             const delay = Math.max(0, targetTime - elapsed);
-             
-             setTimeout(sendNextChunk, delay);
-        };
-
-        sendNextChunk();
-    };
         }
 
         // Handle agent response text
