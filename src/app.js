@@ -31,6 +31,13 @@ async function startApplication() {
       audioFileServer.start();
     }
     
+    // Initialize RTP server (for ConvAI mode)
+    if (MODE === 'conversational_ai') {
+      const externalMediaManager = require('./asterisk/externalMedia');
+      const rtpPort = parseInt(process.env.EXTERNAL_MEDIA_PORT || '10000');
+      await externalMediaManager.createRTPServer(rtpPort);
+    }
+    
     // Connect to Asterisk ARI
     const client = await ariClient.connect();
 

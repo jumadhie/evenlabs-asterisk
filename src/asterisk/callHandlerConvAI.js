@@ -36,12 +36,6 @@ async function handleCallConvAI(client, channel, event) {
       agentId,
     });
 
-    // Initialize RTP server if not already running
-    if (!externalMediaManager.rtpServer) {
-      const rtpPort = parseInt(process.env.EXTERNAL_MEDIA_PORT || '10000');
-      await externalMediaManager.createRTPServer(rtpPort);
-    }
-
     // Create audio bridge with ElevenLabs
     const bridgeInfo = await audioBridge.createBridge(client, channel, agentId);
 

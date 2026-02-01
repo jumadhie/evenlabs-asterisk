@@ -55,6 +55,14 @@ class ExternalMediaManager {
    * @returns {Promise<Object>} - Server instance
    */
   async createRTPServer(port = 10000) {
+    // Return existing server if already listening
+    if (this.rtpServer && this.rtpServer.listening) {
+      logger.debug('RTP server already listening', {
+        port: this.rtpServer.address().port,
+      });
+      return this.rtpServer;
+    }
+
     return new Promise((resolve, reject) => {
       const server = dgram.createSocket('udp4');
 
