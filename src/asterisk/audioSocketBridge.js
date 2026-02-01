@@ -59,16 +59,14 @@ class AudioSocketBridge {
    * @returns {Promise<Object>} - Bridge details
    */
   async createBridge(client, userChannel, agentId) {
+    // Use proper UUID v4 format - AudioSocket requires standard UUID format
     const callUuid = uuidv4();
-    // Use simple short ID for AudioSocket (8 chars alphanumeric)
-    // UUID v4 sometimes causes issues with some AudioSocket implementations depending on dashes
-    const shortId = Math.random().toString(36).substring(2, 10);
     
     try {
       logger.info('Creating AudioSocket bridge', {
         channelId: userChannel.id,
         agentId,
-        uuid: shortId,
+        uuid: callUuid,
       });
 
       // 1. Create ElevenLabs conversation
@@ -87,7 +85,7 @@ class AudioSocketBridge {
       const targetHost = (this.host === '0.0.0.0') ? '127.0.0.1' : this.host;
       
       logger.info('Originating Local channel for AudioSocket', {
-        uuid: shortId,
+        uuid: callUuid,
         targetHost
       });
 
@@ -96,20 +94,20 @@ class AudioSocketBridge {
         app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
         appArgs: 'audiosocket',
         variables: {
-          'AUDIOSOCKET_UUID': shortId,
+          'AUDIOSOCKET_UUID': callUuid,
           'AUDIOSOCKET_SERVER': `${targetHost}:9092`
         },
-        channelId: `audiosocket-local-${shortId}`,
+        channelId: `audiosocket-local-${callUuid}`,
         timeout: 30,
       });
 
       logger.success('AudioSocket channel created', {
         channelId: audioSocketChannel.id,
-        uuid: shortId,
+        uuid: callUuid,
       });
 
       // 3. Wait for AudioSocket connection
-      // Note: we wait for the connection associated with our shortId/uuid
+      // Note: we wait for the connection associated with our callUuid
       // But wait! My AudioSocketServer stores connections by IP:Port
       // I need to update AudioSocketServer to map IDs? 
       // Actually, AudioSocket protocol doesn't send UUID in handshake?
@@ -142,11 +140,11 @@ class AudioSocketBridge {
       // For multiple calls, we have a race condition if 2 connect same time.
       // But let's fix basic connectivity first.
       
-      const connectionId = await this.audioSocketServer.waitForConnection(shortId, 5000);
+      const connectionId = await this.audioSocketServer.waitForConnection(callUuid, 5000);
 
       logger.success('AudioSocket connection established', {
         connectionId,
-        uuid: shortId,
+        uuid: callUuid,
       });
 
       // 4. Create bridge in Asterisk
@@ -171,7 +169,7 @@ class AudioSocketBridge {
 
       // 6. Setup WebSocket handlers for ElevenLabs
       const connection = {
-        uuid: shortId,
+        uuid: callUuid,
         connectionId,
         userChannel,
         audioSocketChannel,
@@ -187,7 +185,7 @@ class AudioSocketBridge {
       return {
         bridge,
         conversationId,
-        uuid: shortId,
+        uuid: callUuid,
       };
 
     } catch (error) {
