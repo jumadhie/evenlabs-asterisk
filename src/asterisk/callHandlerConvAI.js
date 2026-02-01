@@ -19,6 +19,36 @@ async function handleCallConvAI(client, channel, event) {
     state: channel.state,
   });
 
+  let bridgeInfo = null;
+  let isCleanedUp = false;
+
+  // Cleanup function
+  const cleanup = async () => {
+    if (isCleanedUp) {
+      return;
+    }
+    isCleanedUp = true;
+
+    logger.info('Cleaning up call', { channelId, callerId });
+
+    try {
+      // Cleanup audio bridge first
+      await audioBridge.cleanup(channelId);
+
+      // Hangup user channel if still active
+      try {
+        await channel.hangup();
+      } catch (err) {
+        logger.debug('User channel already hung up', { channelId });
+      }
+    } catch (error) {
+      logger.warn('Error during cleanup', {
+        channelId,
+        error: error.message,
+      });
+    }
+  };
+
   try {
     // Answer the call
     await channel.answer();
@@ -37,7 +67,7 @@ async function handleCallConvAI(client, channel, event) {
     });
 
     // Create audio bridge with ElevenLabs
-    const bridgeInfo = await audioBridge.createBridge(client, channel, agentId);
+    bridgeInfo = await audioBridge.createBridge(client, channel, agentId);
 
     logger.success('Conversational AI session started', {
       channelId,
@@ -45,20 +75,29 @@ async function handleCallConvAI(client, channel, event) {
       conversationId: bridgeInfo.conversationId,
     });
 
-    // Handle channel hangup
-    channel.on('StasisEnd', async (event) => {
-      logger.call('Call ended', {
+    // Handle channel StasisEnd (call hangup from user side)
+    const stasisEndHandler = async (event) => {
+      logger.call('Call ended (StasisEnd)', {
         channelId,
         callerId,
       });
-
-      await audioBridge.cleanup(channelId);
-    });
+      await cleanup();
+    };
 
     // Handle channel destroyed
-    channel.on('ChannelDestroyed', async (event) => {
+    const destroyedHandler = async (event) => {
       logger.call('Channel destroyed', { channelId });
-      await audioBridge.cleanup(channelId);
+      await cleanup();
+    };
+
+    // Register event handlers
+    channel.once('StasisEnd', stasisEndHandler);
+    channel.once('ChannelDestroyed', destroyedHandler);
+
+    // Also handle hangup event
+    channel.once('ChannelHangupRequest', async (event) => {
+      logger.call('Hangup requested', { channelId });
+      await cleanup();
     });
 
   } catch (error) {
@@ -69,18 +108,8 @@ async function handleCallConvAI(client, channel, event) {
       stack: error.stack,
     });
 
-    // Try to hang up gracefully
-    try {
-      await channel.hangup();
-    } catch (hangupError) {
-      logger.debug('Could not hang up channel', {
-        channelId,
-        error: hangupError.message,
-      });
-    }
-
-    // Cleanup
-    await audioBridge.cleanup(channelId);
+    // Cleanup on error
+    await cleanup();
   }
 }
 

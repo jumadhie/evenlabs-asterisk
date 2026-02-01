@@ -255,23 +255,36 @@ class AudioBridge {
     const connection = this.activeConnections.get(channelId);
     
     if (!connection) {
+      logger.debug('No active connection to cleanup', { channelId });
       return;
     }
 
     logger.info('Cleaning up audio bridge', { channelId });
 
     try {
-      // Close WebSocket
+      // Close WebSocket first
       if (connection.websocket) {
-        connection.websocket.close();
+        try {
+          connection.websocket.close();
+          logger.debug('WebSocket closed', { channelId });
+        } catch (error) {
+          logger.debug('WebSocket already closed', { error: error.message });
+        }
       }
 
       // Destroy bridge
       if (connection.bridge) {
         try {
           await connection.bridge.destroy();
+          logger.debug('Bridge destroyed', { 
+            channelId,
+            bridgeId: connection.bridge.id,
+          });
         } catch (error) {
-          logger.debug('Bridge already destroyed', { channelId });
+          logger.debug('Bridge already destroyed', { 
+            channelId,
+            error: error.message,
+          });
         }
       }
 
@@ -279,11 +292,34 @@ class AudioBridge {
       if (connection.externalChannel) {
         try {
           await connection.externalChannel.hangup();
+          logger.debug('External channel hung up', { 
+            channelId,
+            externalChannelId: connection.externalChannel.id,
+          });
         } catch (error) {
-          logger.debug('External channel already hung up', { channelId });
+          logger.debug('External channel already hung up', { 
+            channelId,
+            error: error.message,
+          });
         }
       }
 
+      // Hangup user channel  
+      if (connection.userChannel) {
+        try {
+          await connection.userChannel.hangup();
+          logger.debug('User channel hung up', { 
+            channelId,
+          });
+        } catch (error) {
+          logger.debug('User channel already hung up', { 
+            channelId,
+            error: error.message,
+          });
+        }
+      }
+
+      // Remove from active connections
       this.activeConnections.delete(channelId);
 
       logger.success('Audio bridge cleaned up', { channelId });
@@ -293,6 +329,9 @@ class AudioBridge {
         error: error.message,
         channelId,
       });
+      
+      // Force remove from map even on error
+      this.activeConnections.delete(channelId);
     }
   }
 
