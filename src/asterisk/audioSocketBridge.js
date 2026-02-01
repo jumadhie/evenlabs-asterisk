@@ -79,7 +79,8 @@ class AudioSocketBridge {
       // 2. Originate AudioSocket channel via ARI
       const cleanUuid = callUuid.replace(/-/g, ''); // Remove dashes for compatibility
       const targetHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
-      const endpointString = `AudioSocket/${cleanUuid}/${targetHost}:9092`;
+      // Try AudioSocket/server/uuid format
+      const endpointString = `AudioSocket/${targetHost}:9092/${cleanUuid}`;
       
       logger.info('Originating AudioSocket channel', {
         endpoint: endpointString,
