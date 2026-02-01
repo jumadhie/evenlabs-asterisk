@@ -75,6 +75,26 @@ async function connectToAgent(agentId) {
       logger.success('WebSocket connection established', { agentId });
       
       logger.debug('WebSocket opened, waiting for messages...');
+
+      // Send initial configuration (re-added to ensure consistent session state)
+      const initMessage = {
+        type: "conversation_initiation_client_data",
+        conversation_config_override: {
+          agent: {
+            language: "en", 
+            prompt: {
+               // Inject system prompt reinforcement if needed
+               // "override_system_prompt": "You are a helpful assistant. Keep answers short."
+            }
+          },
+          tts: {
+            output_audio_format: "pcm_16000" // Explicitly match our upsampling target
+          }
+        }
+      };
+      
+      ws.send(JSON.stringify(initMessage));
+      logger.info('Sent conversation initiation data', { agentId });
       
       resolve(ws);
     });
