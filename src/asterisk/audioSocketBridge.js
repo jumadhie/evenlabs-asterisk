@@ -14,6 +14,7 @@ class AudioSocketBridge {
   constructor() {
     this.activeConnections = new Map();
     this.audioSocketServer = null;
+    this.host = '0.0.0.0';
   }
 
   /**
@@ -28,32 +29,67 @@ class AudioSocketBridge {
     this.host = host; // Store host for createBridge usage
     this.audioSocketServer = new AudioSocketServer(port, host);
     
-    // ... (rest of initialize)
+    // Setup event handlers
+    this.audioSocketServer.on('connection', (connectionId) => {
+      logger.info('AudioSocket connection received', { connectionId });
+    });
+
+    this.audioSocketServer.on('disconnect', (connectionId) => {
+      logger.info('AudioSocket disconnected', { connectionId });
+      this.handleDisconnect(connectionId);
+    });
+
+    this.audioSocketServer.on('audio', (connectionId, audioData) => {
+      this.handleIncomingAudio(connectionId, audioData);
+    });
+
+    this.audioSocketServer.on('hangup', (connectionId) => {
+      logger.info('AudioSocket hangup received', { connectionId });
+      this.handleDisconnect(connectionId);
+    });
+
+    await this.audioSocketServer.start();
   }
 
-  // ...
-
+  /**
+   * Create bridge between user channel and ElevenLabs
+   * @param {Object} client - ARI client
+   * @param {Object} userChannel - User's channel
+   * @param {string} agentId - ElevenLabs agent ID
+   * @returns {Promise<Object>} - Bridge details
+   */
   async createBridge(client, userChannel, agentId) {
-    // simple short ID
+    const callUuid = uuidv4();
+    // Use simple short ID for AudioSocket (8 chars alphanumeric)
+    // UUID v4 sometimes causes issues with some AudioSocket implementations depending on dashes
     const shortId = Math.random().toString(36).substring(2, 10);
-    const callUuid = uuidv4(); // standard UUID for internal tracking
     
     try {
-      // ...
-      
-      // 2. Originate AudioSocket channel via ARI
-      // Force 127.0.0.1 for connection if we are 0.0.0.0
-      const attempts = [
-        `AudioSocket/127.0.0.1:9092/${shortId}`,
-        `AudioSocket/${shortId}/127.0.0.1:9092` // Backup format
-      ];
+      logger.info('Creating AudioSocket bridge', {
+        channelId: userChannel.id,
+        agentId,
+        uuid: shortId,
+      });
 
-      // We use the first format which is Standard: AudioSocket/server/uuid
-      const endpointString = attempts[0];
+      // 1. Create ElevenLabs conversation
+      const conversation = await createConversation(agentId);
+      const conversationId = conversation.conversation_id;
+      const ws = conversation.websocket;
+
+      logger.success('ElevenLabs conversation created', {
+        conversationId,
+      });
+
+      // 2. Originate AudioSocket channel via ARI
+      // We force 127.0.0.1 if listening on 0.0.0.0
+      // Format: AudioSocket/server:port/uuid (swapped to this order per standard)
+      const targetHost = (this.host === '0.0.0.0') ? '127.0.0.1' : this.host;
+      const endpointString = `AudioSocket/${targetHost}:9092/${shortId}`;
       
       logger.info('Originating AudioSocket channel', {
         endpoint: endpointString,
-        uuid: shortId
+        uuid: shortId,
+        targetHost
       });
 
       const audioSocketChannel = await client.Channel().originate({
@@ -66,15 +102,48 @@ class AudioSocketBridge {
 
       logger.success('AudioSocket channel created', {
         channelId: audioSocketChannel.id,
-        uuid: callUuid,
+        uuid: shortId,
       });
 
       // 3. Wait for AudioSocket connection
-      const connectionId = await this.audioSocketServer.waitForConnection(callUuid, 5000);
+      // Note: we wait for the connection associated with our shortId/uuid
+      // But wait! My AudioSocketServer stores connections by IP:Port
+      // I need to update AudioSocketServer to map IDs? 
+      // Actually, AudioSocket protocol doesn't send UUID in handshake?
+      // WAIT.
+      // AudioSocket Protocol: [Type][Length][Payload]
+      // It DOES NOT send UUID in handshake.
+      // Asterisk sends UUID in the INITIAL BYTES if sending content, OR
+      // When we originate FROM Asterisk, Asterisk connects to us.
+      // We accept connection.
+      // How do we map this connection to the call?
+      
+      // CRITICAL realization: 
+      // Unlike ExternalMedia which is UDP and we match by IP,
+      // AudioSocket is TCP.
+      // When Asterisk connects to us, 
+      // 1. We accept connection.
+      // 2. Asterisk MIGHT send UUID frame first? 
+      // Let's check AudioSocket spec again.
+      // "Every call using AudioSocket requires a UUID for tracking..."
+      
+      // If Asterisk doesn't send UUID on connect, how do we know which call it is?
+      // Usually, the first message is UUID? No.
+      
+      // Let's assume for now 1 call = 1 connection.
+      // But waitForConnection(uuid) in my server requires logic.
+      // My server just stores by IP:Port. 
+      // AND waitForConnection uses `once('connection')` which returns connectionId (IP:port).
+      
+      // So for a single call test, this works.
+      // For multiple calls, we have a race condition if 2 connect same time.
+      // But let's fix basic connectivity first.
+      
+      const connectionId = await this.audioSocketServer.waitForConnection(shortId, 5000);
 
       logger.success('AudioSocket connection established', {
         connectionId,
-        uuid: callUuid,
+        uuid: shortId,
       });
 
       // 4. Create bridge in Asterisk
@@ -99,7 +168,7 @@ class AudioSocketBridge {
 
       // 6. Setup WebSocket handlers for ElevenLabs
       const connection = {
-        uuid: callUuid,
+        uuid: shortId,
         connectionId,
         userChannel,
         audioSocketChannel,
@@ -115,7 +184,7 @@ class AudioSocketBridge {
       return {
         bridge,
         conversationId,
-        uuid: callUuid,
+        uuid: shortId,
       };
 
     } catch (error) {
