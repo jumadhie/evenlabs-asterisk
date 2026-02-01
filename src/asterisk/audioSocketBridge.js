@@ -211,17 +211,34 @@ class AudioSocketBridge {
       try {
         const message = JSON.parse(data);
 
-        // Log all messages for debugging
-        logger.debug('WebSocket message received', message);
+        // DETAILED DEBUG: Log message type and structure
+        const messageType = message.type || 'unknown';
+        const hasAudio = !!message.audio_event?.audio_base_64;
+        const hasAgentResponse = !!message.agent_response_event;
+        
+        logger.debug('📩 WebSocket message received', {
+          type: messageType,
+          hasAudio,
+          hasAgentResponse,
+          conversationId: message.conversation_initiation_metadata_event?.conversation_id || 
+                          message.audio_event?.event_id ||
+                          'N/A',
+        });
+
+        // Log FULL message structure for first few messages (debugging)
+        if (hasAudio || messageType === 'conversation_initiation_metadata_event') {
+          logger.debug('Full message structure:', JSON.stringify(message, null, 2));
+        }
 
         // Handle audio from ElevenLabs
         if (message.audio_event?.audio_base_64) {
           // Decode base64 audio from ElevenLabs (PCM 16kHz)
           const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
 
-          logger.debug('Audio received from ElevenLabs', {
+          logger.info('🎵 Audio received from ElevenLabs', {
             connectionId,
             bytes: pcm16k.length,
+            eventId: message.audio_event.event_id,
           });
 
           // Audio pipeline: ElevenLabs 16kHz PCM → Downsample → Asterisk 8kHz PCM
@@ -231,17 +248,21 @@ class AudioSocketBridge {
           const success = this.audioSocketServer.sendAudio(connectionId, pcm8k);
 
           if (success) {
-            logger.debug('Audio sent to Asterisk via AudioSocket', {
+            logger.info('📤 Audio sent to Asterisk via AudioSocket', {
               connectionId,
               inputBytes: pcm16k.length,
               outputBytes: pcm8k.length,
+            });
+          } else {
+            logger.error('❌ Failed to send audio to AudioSocket', {
+              connectionId,
             });
           }
         }
 
         // Handle agent response text
         if (message.agent_response_event?.agent_response) {
-          logger.info('Agent response', {
+          logger.info('💬 Agent response', {
             connectionId,
             response: message.agent_response_event.agent_response,
           });
@@ -250,6 +271,7 @@ class AudioSocketBridge {
       } catch (error) {
         logger.error('Error processing WebSocket message', {
           error: error.message,
+          stack: error.stack,
           connectionId,
         });
       }
