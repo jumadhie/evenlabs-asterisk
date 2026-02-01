@@ -102,7 +102,8 @@ class RTPServer extends EventEmitter {
     }
 
     // Encode PCM to PCMU using proper library
-    const pcmu = alawmulaw.mulaw.encode(pcmAudio);
+    const encoded = alawmulaw.mulaw.encode(pcmAudio);
+    const pcmu = Buffer.from(encoded);
 
     // Build RTP packet
     const packet = Buffer.alloc(12 + pcmu.length);
