@@ -76,8 +76,9 @@ class AudioSocketBridge {
       });
 
       // 2. Originate AudioSocket channel via ARI
+      const targetHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
       const audioSocketChannel = await client.Channel().originate({
-        endpoint: `AudioSocket/${callUuid}/127.0.0.1:9092`,
+        endpoint: `AudioSocket/${callUuid}/${targetHost}:9092`,
         app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
         appArgs: 'audiosocket',
         channelId: `audiosocket-${callUuid}`,
