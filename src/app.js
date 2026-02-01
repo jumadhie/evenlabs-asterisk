@@ -20,7 +20,6 @@ async function startApplication() {
   logger.info('Configuration:', {
     asteriskHost: config.asterisk.host,
     asteriskApp: config.asterisk.appName,
-    environment: config.app.environment,
     logLevel: config.app.logLevel,
     mode: MODE.toUpperCase(),
   });
