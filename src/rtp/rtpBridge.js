@@ -139,12 +139,28 @@ class RTPBridge {
 
     // Handle incoming audio from Asterisk (via RTP)
     // Handle incoming audio from Asterisk (via RTP)
-    this.rtpServer.on('audio', (sid, pcm8k, rawPayload) => {
+    this.rtpServer.on('audio', (sid, pcm8k, rawPayload, rms) => {
       if (sid !== sessionId) return;
 
-      // prevent echo/hallucinations: ignore user audio while agent is speaking
+      // Barge-In / Interruption Logic
+      // If agent is speaking but user speaks loudly (RMS > Threshold), stop agent and let user through
+      const BARGE_IN_THRESHOLD = parseInt(process.env.BARGE_IN_THRESHOLD) || 2000;
+      
       if (session.isAgentSpeaking) {
-        return;
+        if (rms > BARGE_IN_THRESHOLD) {
+           logger.info('🗣️ Barge-in detected! Stopping playback.', { sessionId, rms });
+           
+           // 1. Clear Playback Buffer (Stop agent voice immediately)
+           session.audioBuffer = Buffer.alloc(0);
+           session.isPlaying = false;
+           session.isAgentSpeaking = false; 
+
+           // 2. Send explicit interrupt (optional, but ensures ElevenLabs stops generating)
+           // Sending audio usually triggers it, but we want to be sure.
+        } else {
+           // User is silent/background noise -> Ignore (Half-Duplex)
+           return;
+        }
       }
 
       const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
