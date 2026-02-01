@@ -21,6 +21,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@fonoster/streams": "^0.17.1",
     "ari-client": "^2.2.0",
     "axios": "^1.6.7",
     "dotenv": "^16.4.1",
@@ -28,6 +29,7 @@
     "fluent-ffmpeg": "^2.1.2",
     "form-data": "^4.0.5",
     "node-fetch": "^3.3.2",
+    "uuid": "^13.0.0",
     "winston": "^3.11.0",
     "ws": "^8.16.0"
   },

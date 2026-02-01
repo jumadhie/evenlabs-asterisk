@@ -1,7 +1,7 @@
 const logger = require('../utils/logger');
 const config = require('../config/config');
-const audioBridge = require('./audioBridge');
-const externalMediaManager = require('./externalMedia');
+const audioBridge = require('./audioSocketBridge');
+// const externalMediaManager = require('./externalMedia'); // Deprecated
 
 /**
  * Handle incoming call with Conversational AI

@@ -49,11 +49,11 @@ async function startApplication() {
       audioFileServer.start();
     }
     
-    // Initialize RTP server (for ConvAI mode)
+    // Initialize AudioSocket server (for ConvAI mode)
     if (MODE === 'conversational_ai') {
-      const externalMediaManager = require('./asterisk/externalMedia');
-      const rtpPort = parseInt(process.env.EXTERNAL_MEDIA_PORT || '10000');
-      await externalMediaManager.createRTPServer(rtpPort);
+      const audioSocketBridge = require('./asterisk/audioSocketBridge');
+      const audioSocketPort = parseInt(process.env.AUDIOSOCKET_PORT || '9092');
+      await audioSocketBridge.initialize(audioSocketPort);
     }
     
     // Connect to Asterisk ARI
