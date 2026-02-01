@@ -229,11 +229,16 @@ class RTPBridge {
             offset += CHUNK_SIZE;
             packetCount++;
 
-            // Schedule next packet
-            setTimeout(sendNextChunk, PACKET_INTERVAL);
+            // Calculate next scheduled time to compensate for drift
+            const elapsed = Date.now() - startTime;
+            const targetTime = packetCount * PACKET_INTERVAL;
+            const delay = Math.max(0, targetTime - elapsed);
+
+            setTimeout(sendNextChunk, delay);
           };
 
-          // Start sending audio
+          // Start sending audio with drift compensation
+          const startTime = Date.now();
           sendNextChunk();
 
           logger.info('📤 Started audio playback to Asterisk', {
