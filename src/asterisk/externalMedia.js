@@ -33,7 +33,7 @@ class ExternalMediaManager {
         channelId: channelId,
         app: config.asterisk.appName,
         external_host: `${externalHost}:${externalPort}`,
-        format: 'slin16', // 16kHz signed linear PCM
+        format: 'ulaw', // 8kHz ulaw for compatibility with most softphones
       });
 
       logger.success('ExternalMedia channel created', {
@@ -106,8 +106,8 @@ class ExternalMediaManager {
     // Version (2), Padding (0), Extension (0), CSRC count (0)
     header[0] = 0x80;
     
-    // Marker (0), Payload type (11 for SLIN)
-    header[1] = 11;
+    // Marker (0), Payload type (0 for ulaw)
+    header[1] = 0;
     
     // Sequence number
     header.writeUInt16BE(sequenceNumber, 2);
