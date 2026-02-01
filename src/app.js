@@ -76,9 +76,9 @@ async function startApplication() {
 
     // Start listening for calls
     client.on('StasisStart', async (event, channel) => {
-      // Filter out ExternalMedia channels to prevent infinite loop
-      if (channel.name && channel.name.startsWith('ExternalMedia/')) {
-        logger.debug('Ignoring ExternalMedia channel', {
+      // Filter out UnicastRTP (ExternalMedia) channels to prevent infinite loop
+      if (channel.name && (channel.name.startsWith('UnicastRTP/') || channel.name.startsWith('ExternalMedia/'))) {
+        logger.debug('Ignoring UnicastRTP/ExternalMedia channel', {
           channelId: channel.id,
           channelName: channel.name,
         });
@@ -86,7 +86,7 @@ async function startApplication() {
       }
 
       // Filter out channels we created ourselves
-      if (channel.id.startsWith('external-media-')) {
+      if (channel.id && channel.id.startsWith('external-media-')) {
         logger.debug('Ignoring self-created external channel', {
           channelId: channel.id,
         });
