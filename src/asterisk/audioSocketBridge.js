@@ -320,6 +320,14 @@ class AudioSocketBridge {
       return;
     }
 
+    // Prevent infinite loop: check if already cleaning up
+    if (connection.cleaningUp) {
+      return;
+    }
+
+    // Mark as cleaning up to prevent re-entry
+    connection.cleaningUp = true;
+
     const { websocket, conversationId } = connection;
 
     logger.info('Cleaning up AudioSocket bridge', {
@@ -327,7 +335,7 @@ class AudioSocketBridge {
       conversationId,
     });
 
-    // Close WebSocket
+    // Close WebSocket (do NOT send hangup - it will trigger more events!)
     if (websocket && websocket.readyState === 1) {
       websocket.close();
     }
@@ -356,10 +364,8 @@ class AudioSocketBridge {
       if (connection.userChannel.id === channelId || 
           connection.audioSocketChannel.id === channelId) {
         
-        // Send hangup to AudioSocket
-        this.audioSocketServer.sendHangup(connectionId);
-        
-        // Cleanup connection
+        // NOTE: Do NOT call sendHangup here - it triggers a hangup event loop!
+        // Just cleanup the connection directly
         this.handleDisconnect(connectionId);
         
         logger.success('AudioSocket bridge cleaned up', {
