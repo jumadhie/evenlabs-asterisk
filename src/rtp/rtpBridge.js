@@ -206,6 +206,7 @@ class RTPBridge {
                  }
                  
                  session.isPlaying = false;
+                 session.isAgentSpeaking = false; 
                  return;
              }
 
