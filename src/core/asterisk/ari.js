@@ -1,4 +1,4 @@
-const client = require('ari-client');
+const ari = require('ari-client');
 const config = require('../../config/config');
 const logger = require('../../utils/logger');
 
