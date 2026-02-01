@@ -16,8 +16,10 @@ function upsample8to16(pcm8k) {
 }
 
 function downsample16to8(pcm16k) {
-  const pcm8k = Buffer.alloc(pcm16k.length / 2);
-  for (let i = 0; i < pcm16k.length / 4; i++) {
+  // Ensure we only process complete 4-byte sample pairs
+  const samplePairs = Math.floor(pcm16k.length / 4);
+  const pcm8k = Buffer.alloc(samplePairs * 2);
+  for (let i = 0; i < samplePairs; i++) {
     const sample = pcm16k.readInt16LE(i * 4);
     pcm8k.writeInt16LE(sample, i * 2);
   }
