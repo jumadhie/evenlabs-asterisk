@@ -73,6 +73,11 @@ async function connectToAgent(agentId) {
     ws.on('open', () => {
       clearTimeout(connectionTimeout);
       logger.success('WebSocket connection established', { agentId });
+      
+      // Send initial configuration if needed
+      // Some WebSocket APIs require initial handshake
+      logger.debug('WebSocket opened, waiting for messages...');
+      
       resolve(ws);
     });
 
@@ -80,24 +85,47 @@ async function connectToAgent(agentId) {
       clearTimeout(connectionTimeout);
       logger.failure('WebSocket error', {
         error: error.message,
+        code: error.code,
         agentId,
       });
       reject(error);
     });
 
     ws.on('message', (data) => {
-      logger.debug('WebSocket message received', {
-        agentId,
-        dataLength: data.length,
-      });
+      try {
+        const message = typeof data === 'string' ? data : data.toString();
+        logger.debug('WebSocket message received', {
+          agentId,
+          message: message.substring(0, 200), // Log first 200 chars
+        });
+      } catch (err) {
+        logger.warn('Error logging WebSocket message', {
+          error: err.message,
+        });
+      }
     });
 
     ws.on('close', (code, reason) => {
-      logger.info('WebSocket connection closed', {
+      const reasonStr = reason ? reason.toString() : 'No reason provided';
+      logger.warn('WebSocket connection closed', {
         agentId,
         code,
-        reason: reason.toString(),
+        reason: reasonStr,
+        wasClean: code === 1000,
       });
+      
+      // Log common close codes
+      if (code === 1002) {
+        logger.failure('WebSocket protocol error - check API compatibility');
+      } else if (code === 1003) {
+        logger.failure('WebSocket unsupported data');
+      } else if (code === 1006) {
+        logger.failure('WebSocket abnormal closure - connection lost');
+      } else if (code === 1008) {
+        logger.failure('WebSocket policy violation - check authentication');
+      } else if (code === 4001) {
+        logger.failure('WebSocket unauthorized - check API key');
+      }
     });
   });
 }
