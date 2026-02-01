@@ -104,7 +104,7 @@ class RTPServer extends EventEmitter {
     });
 
     // Emit both PCM (for legacy/other uses) and Raw Payload (for optimization)
-    this.emit('audio', sessionId, pcm, payload);
+    this.emit('audio', sessionId, pcm);
   }
 
   sendAudio(sessionId, pcmAudio) {
