@@ -101,8 +101,11 @@ class RTPServer extends EventEmitter {
       return false;
     }
 
+    // Convert Buffer to Int16Array for alawmulaw library
+    const int16 = new Int16Array(pcmAudio.buffer, pcmAudio.byteOffset, pcmAudio.length / 2);
+    
     // Encode PCM to PCMU using proper library
-    const encoded = alawmulaw.mulaw.encode(pcmAudio);
+    const encoded = alawmulaw.mulaw.encode(int16);
     const pcmu = Buffer.from(encoded);
 
     // Build RTP packet
