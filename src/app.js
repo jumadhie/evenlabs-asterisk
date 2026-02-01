@@ -1,39 +1,51 @@
 const ariClient = require('./asterisk/ariClient');
 const { handleCall } = require('./asterisk/callHandler');
+const { handleCallConvAI } = require('./asterisk/callHandlerConvAI');
 const logger = require('./utils/logger');
 const config = require('./config/config');
 const audioFileServer = require('./utils/audioFileServer');
+const audioBridge = require('./asterisk/audioBridge');
 
+// Determine mode: 'tts' or 'conversational_ai'
+const MODE = process.env.VOICE_AGENT_MODE || 'tts';
 
 /**
  * Main application entry point
  */
 async function startApplication() {
-  logger.info('='.repeat(60));
+  logger.info('============================================================');
   logger.info('🚀 Starting ElevenLabs-Asterisk Voice Agent');
-  logger.info('='.repeat(60));
+  logger.info('============================================================');
 
   logger.info('Configuration:', {
     asteriskHost: config.asterisk.host,
     asteriskApp: config.asterisk.appName,
-    environment: config.app.env,
+    environment: config.app.environment,
     logLevel: config.app.logLevel,
+    mode: MODE.toUpperCase(),
   });
 
   try {
-    // Start audio file server first
-    audioFileServer.start();
+    // Start audio file server (for TTS mode)
+    if (MODE === 'tts') {
+      audioFileServer.start();
+    }
     
     // Connect to Asterisk ARI
     const client = await ariClient.connect();
 
     logger.success('Application started successfully');
     logger.info(`📞 Listening for calls on Stasis app: ${config.asterisk.appName}`);
-    logger.info('='.repeat(60));
+    logger.info('============================================================');
 
-    // Handle incoming calls (Stasis Start)
+    // Start listening for calls
     client.on('StasisStart', async (event, channel) => {
-      await handleCall(client, channel, event);
+      // Route to appropriate handler based on mode
+      if (MODE === 'conversational_ai') {
+        await handleCallConvAI(client, channel, event);
+      } else {
+        await handleCall(client, channel, event);
+      }
     });
 
     // Handle application errors
@@ -77,6 +89,9 @@ async function shutdown(signal) {
   logger.info(`\n${signal} received, shutting down gracefully...`);
 
   try {
+    // Cleanup audio bridges (ConvAI mode)
+    await audioBridge.cleanupAll();
+    
     // Stop audio file server
     audioFileServer.stop();
     
