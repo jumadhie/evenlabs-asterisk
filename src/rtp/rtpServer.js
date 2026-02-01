@@ -147,7 +147,7 @@ class RTPServer extends EventEmitter {
 
     // Increment sequence number and timestamp
     session.sequenceNumber = (session.sequenceNumber + 1) % 65536;
-    session.timestamp += pcmAudio.length / 2;
+    session.timestamp = (session.timestamp + pcmAudio.length / 2) % 4294967296;
 
     return true;
   }

@@ -99,7 +99,11 @@ class RTPBridge {
         websocket: ws,
         userChannel,
         externalMediaChannel,
+        conversationId: null,
+        userChannel,
+        externalMediaChannel,
         bridge,
+        isAgentSpeaking: false, // Track agent speech state
       };
 
       this.activeSessions.set(sessionId, session);
@@ -135,6 +139,11 @@ class RTPBridge {
     // Handle incoming audio from Asterisk (via RTP)
     this.rtpServer.on('audio', (sid, pcm8k) => {
       if (sid !== sessionId) return;
+
+      // prevent echo/hallucinations: ignore user audio while agent is speaking
+      if (session.isAgentSpeaking) {
+        return;
+      }
 
       // Upsample 8kHz → 16kHz for ElevenLabs
       const pcm16k = upsample8to16(pcm8k);
@@ -189,6 +198,9 @@ class RTPBridge {
             bytes: pcm16k.length,
           });
 
+          // Set speaking state ON
+          session.isAgentSpeaking = true;
+
           // Downsample 16kHz → 8kHz for Asterisk
           const pcm8k = downsample16to8(pcm16k);
 
@@ -207,6 +219,8 @@ class RTPBridge {
                 sessionId,
                 totalPackets: packetCount,
               });
+              // Set speaking state OFF after playback
+              session.isAgentSpeaking = false;
               return;
             }
 
