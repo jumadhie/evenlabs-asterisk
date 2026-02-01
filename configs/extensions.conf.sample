@@ -1,0 +1,50 @@
+; ============================================
+; DIALPLAN CONFIGURATION
+; File: /etc/asterisk/extensions.conf
+; ============================================
+; Copy context [from-internal] to your extensions.conf
+
+[from-internal]
+; ============================================
+; Test ElevenLabs Voice Agent
+; ============================================
+exten => *123,1,NoOp(Testing ElevenLabs Voice Agent)
+  same => n,Answer()
+  same => n,Wait(1)
+  same => n,Stasis(elevenlabs-agent)
+  same => n,Hangup()
+
+exten => 9123,1,NoOp(Test Voice Agent Alt)
+  same => n,Answer()
+  same => n,Stasis(elevenlabs-agent)
+  same => n,Hangup()
+
+; ============================================
+; Call Between Extensions
+; ============================================
+exten => 100,1,NoOp(Call to Extension 100)
+  same => n,Dial(PJSIP/100,30)
+  same => n,Hangup()
+
+exten => 101,1,NoOp(Call to Extension 101)
+  same => n,Dial(PJSIP/101,30)
+  same => n,Hangup()
+
+; ============================================
+; Test Extensions
+; ============================================
+exten => 888,1,NoOp(Echo Test - Check Audio)
+  same => n,Answer()
+  same => n,Echo()
+  same => n,Hangup()
+
+exten => 777,1,NoOp(Playback Test)
+  same => n,Answer()
+  same => n,Playback(hello-world)
+  same => n,Playback(welcome)
+  same => n,Hangup()
+
+exten => 666,1,NoOp(Music on Hold Test)
+  same => n,Answer()
+  same => n,MusicOnHold()
+  same => n,Hangup()

@@ -1,0 +1,39 @@
+; ============================================
+; PJSIP WIZARD CONFIGURATION
+; File: /etc/asterisk/pjsip_wizard.conf
+; ============================================
+; Copy this entire block to your pjsip_wizard.conf
+
+; Extension 100 - For Testing
+[100]
+type = wizard
+accepts_registrations = yes
+accepts_auth = yes
+has_hint = yes
+inbound_auth/username = 100
+inbound_auth/password = test100
+endpoint/context = from-internal
+endpoint/disallow = all
+endpoint/allow = ulaw
+endpoint/allow = alaw
+endpoint/direct_media = no
+endpoint/rtp_symmetric = yes
+aor/max_contacts = 1
+aor/qualify_frequency = 30
+
+; Extension 101 - Optional (untuk test calling antar extension)
+[101]
+type = wizard
+accepts_registrations = yes
+accepts_auth = yes
+has_hint = yes
+inbound_auth/username = 101
+inbound_auth/password = test101
+endpoint/context = from-internal
+endpoint/disallow = all
+endpoint/allow = ulaw
+endpoint/allow = alaw
+endpoint/direct_media = no
+endpoint/rtp_symmetric = yes
+aor/max_contacts = 1
+aor/qualify_frequency = 30

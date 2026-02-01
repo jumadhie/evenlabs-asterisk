@@ -1,0 +1,41 @@
+{
+  "name": "elevenlabs-asterisk-agent",
+  "version": "1.0.0",
+  "description": "Voice Agent Integration between Asterisk and ElevenLabs API",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "node test/testCall.js",
+    "test:connection": "node test/testConnection.js",
+    "lint": "eslint src/**/*.js"
+  },
+  "keywords": [
+    "asterisk",
+    "elevenlabs",
+    "voice-agent",
+    "ari",
+    "tts",
+    "conversational-ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ari-client": "^2.2.0",
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.1",
+    "express": "^5.2.1",
+    "fluent-ffmpeg": "^2.1.2",
+    "form-data": "^4.0.5",
+    "node-fetch": "^3.3.2",
+    "winston": "^3.11.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
