@@ -19,7 +19,7 @@ class AudioSocketBridge {
   /**
    * Initialize AudioSocket server
    */
-  async initialize(port = 9092, host = '0.0.0.0') {
+  async initialize(port = 9092, host = '192.168.50.2') {
     if (this.audioSocketServer) {
       logger.debug('AudioSocket server already initialized');
       return;
