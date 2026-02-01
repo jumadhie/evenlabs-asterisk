@@ -4,7 +4,7 @@ const { handleCallConvAI } = require('./asterisk/callHandlerConvAI');
 const logger = require('./utils/logger');
 const config = require('./config/config');
 const audioFileServer = require('./utils/audioFileServer');
-const audioBridge = require('./asterisk/audioBridge');
+
 
 // Determine mode: 'tts' or 'conversational_ai'
 const MODE = process.env.VOICE_AGENT_MODE || 'tts';
@@ -105,15 +105,7 @@ async function startApplication() {
         return;
       }
 
-      // Filter out internal AudioSocket utility channels (prevent infinite loop)
-      const args = event.args || [];
-      if (args.includes('audiosocket')) {
-        logger.debug('Ignoring internal AudioSocket channel', {
-          channelId: channel.id,
-          args: args
-        });
-        return;
-      }
+
 
       // Route to appropriate handler based on mode
       if (MODE === 'conversational_ai') {
@@ -165,7 +157,10 @@ async function shutdown(signal) {
 
   try {
     // Cleanup audio bridges (ConvAI mode)
-    await audioBridge.cleanupAll();
+    if (MODE === 'conversational_ai') {
+        const rtpBridge = require('./asterisk/rtpBridge');
+        await rtpBridge.shutdown(); 
+    }
     
     // Stop audio file server
     audioFileServer.stop();
