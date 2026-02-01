@@ -154,7 +154,7 @@ class RTPBridge {
         logger.debug('Audio sent to ElevenLabs', {
           sessionId,
           inputBytes: pcm8k.length,
-          outputBytes: pcm16k.length,
+          outputBytes: audioData.length,
         });
       }
     });
