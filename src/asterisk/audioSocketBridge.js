@@ -147,6 +147,20 @@ class AudioSocketBridge {
         uuid: callUuid,
       });
 
+      // CRITICAL: Store connection mapping IMMEDIATELY to handle incoming audio
+      // Audio can arrive as soon as the connection is established
+      const connection = {
+        uuid: callUuid,
+        connectionId,
+        userChannel,
+        audioSocketChannel,
+        bridge: null, // Will be set after bridge creation
+        websocket: ws,
+        conversationId,
+      };
+
+      this.activeConnections.set(connectionId, connection);
+
       // 4. Create bridge in Asterisk
       const bridgeId = `bridge-${userChannel.id}`;
       const bridge = await client.Bridge().create({
@@ -167,18 +181,8 @@ class AudioSocketBridge {
         channels: [userChannel.id, audioSocketChannel.id],
       });
 
-      // 6. Setup WebSocket handlers for ElevenLabs
-      const connection = {
-        uuid: callUuid,
-        connectionId,
-        userChannel,
-        audioSocketChannel,
-        bridge,
-        websocket: ws,
-        conversationId,
-      };
-
-      this.activeConnections.set(connectionId, connection);
+      // 6. Update bridge in connection and setup WebSocket handlers
+      connection.bridge = bridge;
 
       this.setupWebSocketHandlers(connection);
 
