@@ -49,11 +49,23 @@ async function startApplication() {
       audioFileServer.start();
     }
     
-    // Initialize AudioSocket server (for ConvAI mode)
+    // Initialize RTP server and bridge (for ConvAI mode)
     if (MODE === 'conversational_ai') {
-      const audioSocketBridge = require('./asterisk/audioSocketBridge');
-      const audioSocketPort = parseInt(process.env.AUDIOSOCKET_PORT || '9092');
-      await audioSocketBridge.initialize(audioSocketPort);
+      const RTPServer = require('./rtp/rtpServer');
+      const RTPBridge = require('./rtp/rtpBridge');
+      
+      // Create RTP server (ports 10000-10100)
+      const rtpServer = new RTPServer(10000, 10100);
+      
+      // Create RTP bridge instance
+      const rtpBridge = new RTPBridge(rtpServer);
+      
+      // Export for handler access
+      require('./asterisk/rtpBridge').instance = rtpBridge;
+      
+      logger.success('RTP server initialized', {
+        portRange: '10000-10100',
+      });
     }
     
     // Connect to Asterisk ARI
