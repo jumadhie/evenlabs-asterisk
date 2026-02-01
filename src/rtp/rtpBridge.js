@@ -189,16 +189,42 @@ class RTPBridge {
           // Downsample 16kHz → 8kHz for Asterisk
           const pcm8k = downsample16to8(pcm16k);
 
-          // Send to Asterisk via RTP
-          const success = this.rtpServer.sendAudio(sessionId, pcm8k);
+          // Send audio in chunks - 160 bytes per RTP packet (20ms at 8kHz)
+          // PCM 8kHz mono 16-bit = 8000 samples/sec * 2 bytes = 16000 bytes/sec
+          // 20ms = 160 samples * 2 bytes = 320 bytes of PCM
+          const CHUNK_SIZE = 320; // 20ms of PCM at 8kHz 16-bit
+          const PACKET_INTERVAL = 20; // 20ms between packets
 
-          if (success) {
-            logger.info('📤 Audio sent to Asterisk via RTP', {
-              sessionId,
-              inputBytes: pcm16k.length,
-              outputBytes: pcm8k.length,
-            });
-          }
+          let offset = 0;
+          let packetCount = 0;
+
+          const sendNextChunk = () => {
+            if (offset >= pcm8k.length) {
+              logger.debug('Audio playback complete', {
+                sessionId,
+                totalPackets: packetCount,
+              });
+              return;
+            }
+
+            const chunk = pcm8k.slice(offset, offset + CHUNK_SIZE);
+            this.rtpServer.sendAudio(sessionId, chunk);
+            offset += CHUNK_SIZE;
+            packetCount++;
+
+            // Schedule next packet
+            setTimeout(sendNextChunk, PACKET_INTERVAL);
+          };
+
+          // Start sending audio
+          sendNextChunk();
+
+          logger.info('📤 Started audio playback to Asterisk', {
+            sessionId,
+            totalBytes: pcm8k.length,
+            estimatedPackets: Math.ceil(pcm8k.length / CHUNK_SIZE),
+            estimatedDuration: Math.ceil(pcm8k.length / CHUNK_SIZE) * PACKET_INTERVAL + 'ms',
+          });
         }
 
         // Handle agent response text
