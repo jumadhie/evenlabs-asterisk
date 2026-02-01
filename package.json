@@ -22,6 +22,7 @@
   "license": "MIT",
   "dependencies": {
     "@fonoster/streams": "^0.17.1",
+    "alawmulaw": "^6.0.0",
     "ari-client": "^2.2.0",
     "axios": "^1.6.7",
     "dotenv": "^16.4.1",
