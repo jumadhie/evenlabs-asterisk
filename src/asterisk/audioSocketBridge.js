@@ -225,6 +225,19 @@ class AudioSocketBridge {
                           'N/A',
         });
 
+        // CRITICAL: Update conversation ID from ElevenLabs!
+        // We generate local ID but ElevenLabs sends REAL ID in first message
+        if (message.conversation_initiation_metadata_event?.conversation_id) {
+          const realConversationId = message.conversation_initiation_metadata_event.conversation_id;
+          
+          logger.info('🔄 Updating conversation ID from ElevenLabs', {
+            oldId: connection.conversationId,
+            newId: realConversationId,
+          });
+          
+          connection.conversationId = realConversationId;
+        }
+
         // Log FULL message structure for first few messages (debugging)
         if (hasAudio || messageType === 'conversation_initiation_metadata_event') {
           logger.debug('Full message structure:', JSON.stringify(message, null, 2));
