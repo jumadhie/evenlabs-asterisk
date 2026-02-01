@@ -121,12 +121,26 @@ class ExternalMediaManager {
     // Combine header and payload
     const packet = Buffer.concat([header, audioData]);
     
+    logger.debug('Sending RTP packet', {
+      destination: `${host}:${port}`,
+      packetSize: packet.length,
+      audioSize: audioData.length,
+      seq: sequenceNumber,
+      timestamp,
+    });
+    
     // Send packet
     this.rtpServer.send(packet, port, host, (error) => {
       if (error) {
-        logger.warn('Failed to send RTP packet', {
+        logger.error('Failed to send RTP packet', {
           error: error.message,
           destination: `${host}:${port}`,
+          stack: error.stack,
+        });
+      } else {
+        logger.debug('RTP packet sent successfully', {
+          destination: `${host}:${port}`,
+          size: packet.length,
         });
       }
     });
