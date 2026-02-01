@@ -19,7 +19,7 @@ class AudioSocketBridge {
   /**
    * Initialize AudioSocket server
    */
-  async initialize(port = 9092, host = '192.168.50.2') {
+  async initialize(port = 9092, host = '0.0.0.0') {
     if (this.audioSocketServer) {
       logger.debug('AudioSocket server already initialized');
       return;
@@ -28,71 +28,39 @@ class AudioSocketBridge {
     this.host = host; // Store host for createBridge usage
     this.audioSocketServer = new AudioSocketServer(port, host);
     
-    // Setup event handlers
-    this.audioSocketServer.on('connection', (connectionId) => {
-      logger.info('AudioSocket connection received', { connectionId });
-    });
-
-    this.audioSocketServer.on('disconnect', (connectionId) => {
-      logger.info('AudioSocket disconnected', { connectionId });
-      this.handleDisconnect(connectionId);
-    });
-
-    this.audioSocketServer.on('audio', (connectionId, audioData) => {
-      this.handleIncomingAudio(connectionId, audioData);
-    });
-
-    this.audioSocketServer.on('hangup', (connectionId) => {
-      logger.info('AudioSocket hangup received', { connectionId });
-      this.handleDisconnect(connectionId);
-    });
-
-    await this.audioSocketServer.start();
+    // ... (rest of initialize)
   }
 
-  /**
-   * Create bridge between user channel and ElevenLabs
-   * @param {Object} client - ARI client
-   * @param {Object} userChannel - User's channel
-   * @param {string} agentId - ElevenLabs agent ID
-   * @returns {Promise<Object>} - Bridge details
-   */
+  // ...
+
   async createBridge(client, userChannel, agentId) {
-    const callUuid = uuidv4();
+    // simple short ID
+    const shortId = Math.random().toString(36).substring(2, 10);
+    const callUuid = uuidv4(); // standard UUID for internal tracking
     
     try {
-      logger.info('Creating AudioSocket bridge', {
-        channelId: userChannel.id,
-        agentId,
-        uuid: callUuid,
-      });
-
-      // 1. Create ElevenLabs conversation
-      const conversation = await createConversation(agentId);
-      const conversationId = conversation.conversation_id;
-      const ws = conversation.websocket;
-
-      logger.success('ElevenLabs conversation created', {
-        conversationId,
-      });
-
+      // ...
+      
       // 2. Originate AudioSocket channel via ARI
-      const cleanUuid = callUuid.replace(/-/g, ''); // Remove dashes for compatibility
-      const targetHost = this.host === '0.0.0.0' ? '127.0.0.1' : this.host;
-      // Try AudioSocket/server/uuid format
-      const endpointString = `AudioSocket/${targetHost}:9092/${cleanUuid}`;
+      // Force 127.0.0.1 for connection if we are 0.0.0.0
+      const attempts = [
+        `AudioSocket/127.0.0.1:9092/${shortId}`,
+        `AudioSocket/${shortId}/127.0.0.1:9092` // Backup format
+      ];
+
+      // We use the first format which is Standard: AudioSocket/server/uuid
+      const endpointString = attempts[0];
       
       logger.info('Originating AudioSocket channel', {
         endpoint: endpointString,
-        host: this.host,
-        targetHost
+        uuid: shortId
       });
 
       const audioSocketChannel = await client.Channel().originate({
         endpoint: endpointString,
         app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
         appArgs: 'audiosocket',
-        channelId: `audiosocket-${cleanUuid}`,
+        channelId: `audiosocket-${shortId}`,
         timeout: 30,
       });
 
