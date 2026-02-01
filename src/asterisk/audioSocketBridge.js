@@ -80,23 +80,26 @@ class AudioSocketBridge {
         conversationId,
       });
 
-      // 2. Originate AudioSocket channel via ARI
-      // We force 127.0.0.1 if listening on 0.0.0.0
-      // Format: AudioSocket/server:port/uuid (swapped to this order per standard)
-      const targetHost = (this.host === '0.0.0.0') ? '127.0.0.1' : this.host;
-      const endpointString = `AudioSocket/${targetHost}:9092/${shortId}`;
+      // 2. Originate Local channel to access AudioSocket application
+      // We use Local channel to execute dialplan which runs AudioSocket() app
+      // This is more robust than dialing AudioSocket channel directly
       
-      logger.info('Originating AudioSocket channel', {
-        endpoint: endpointString,
+      const targetHost = (this.host === '0.0.0.0') ? '127.0.0.1' : this.host;
+      
+      logger.info('Originating Local channel for AudioSocket', {
         uuid: shortId,
         targetHost
       });
 
       const audioSocketChannel = await client.Channel().originate({
-        endpoint: endpointString,
+        endpoint: `Local/start@audiosocket-bridge`,
         app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
         appArgs: 'audiosocket',
-        channelId: `audiosocket-${shortId}`,
+        variables: {
+          'AUDIOSOCKET_UUID': shortId,
+          'AUDIOSOCKET_SERVER': `${targetHost}:9092`
+        },
+        channelId: `audiosocket-local-${shortId}`,
         timeout: 30,
       });
 
