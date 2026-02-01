@@ -107,6 +107,9 @@ class AudioBridge {
       channelId: userChannel.id,
     });
 
+    // Increase max listeners to prevent memory leak warning
+    websocket.setMaxListeners(20);
+
     // Handle audio FROM Asterisk TO ElevenLabs
     externalMediaManager.onAudioReceived((audioData, rinfo) => {
       // Store RTP endpoint for sending back
@@ -134,7 +137,7 @@ class AudioBridge {
     });
 
     // Handle audio FROM ElevenLabs TO Asterisk
-    websocket.on('message', (data) => {
+    const messageHandler = (data) => {
       try {
         const message = JSON.parse(data.toString());
 
@@ -176,20 +179,28 @@ class AudioBridge {
           error: error.message,
         });
       }
-    });
+    };
 
-    websocket.on('error', (error) => {
+    const errorHandler = (error) => {
       logger.failure('WebSocket error', {
         error: error.message,
         conversationId: connection.conversationId,
       });
-    });
+    };
 
-    websocket.on('close', () => {
+    const closeHandler = () => {
       logger.info('WebSocket closed', {
         conversationId: connection.conversationId,
       });
-    });
+      // Cleanup on close
+      websocket.removeListener('message', messageHandler);
+      websocket.removeListener('error', errorHandler);
+      websocket.removeListener('close', closeHandler);
+    };
+
+    websocket.on('message', messageHandler);
+    websocket.on('error', errorHandler);
+    websocket.on('close', closeHandler);
   }
 
   /**
@@ -209,11 +220,6 @@ class AudioBridge {
       // Close WebSocket
       if (connection.websocket) {
         connection.websocket.close();
-      }
-
-      // End ElevenLabs conversation
-      if (connection.conversationId) {
-        await endConversation(connection.conversationId);
       }
 
       // Destroy bridge
