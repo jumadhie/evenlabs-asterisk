@@ -46,6 +46,26 @@ class AsteriskARIClient {
       return this.client;
     } catch (error) {
       this.isConnected = false;
+      // Handle Swagger API docs errors gracefully
+      if (error.message && error.message.includes('api-docs')) {
+        logger.warn('Swagger API docs issue (non-critical)', {
+          error: error.message,
+          host: config.asterisk.host,
+        });
+
+        // Client might still work despite Swagger error.
+        // Wait a bit and check if client was initialized.
+        // This might be necessary if the connection is established but the API docs fetch fails.
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        if (this.client) {
+          this.isConnected = true; // Assume connected if client object exists
+          logger.success('ARI client connected despite Swagger warning');
+          this.setupErrorHandlers(); // Setup handlers if connection was successful
+          return this.client;
+        }
+      }
+
       logger.failure('Failed to connect to Asterisk ARI', {
         error: error.message,
         host: config.asterisk.host,
