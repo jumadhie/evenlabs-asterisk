@@ -69,6 +69,9 @@ class RTPServer extends EventEmitter {
     });
   }
 
+  handleRTPPacket(sessionId, packet) {
+    if (packet.length < 12) return;
+
     // Parse RTP header
     const payloadType = packet[1] & 0x7F;
     const sequenceNumber = packet.readUInt16BE(2);
@@ -100,7 +103,8 @@ class RTPServer extends EventEmitter {
       rms: Math.round(rms),
     });
 
-    this.emit('audio', sessionId, pcm);
+    // Emit both PCM (for legacy/other uses) and Raw Payload (for optimization)
+    this.emit('audio', sessionId, pcm, payload);
   }
 
   sendAudio(sessionId, pcmAudio) {

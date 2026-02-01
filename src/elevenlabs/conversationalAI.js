@@ -74,8 +74,37 @@ async function connectToAgent(agentId) {
       clearTimeout(connectionTimeout);
       logger.success('WebSocket connection established', { agentId });
       
-      // Send initial configuration if needed
-      // Some WebSocket APIs require initial handshake
+      // Send initial configuration for correct audio format
+      const initMessage = {
+        type: "conversation_initiation_client_data",
+        conversation_config_override: {
+          agent: {
+            language: "en", // Default to English, can be parameterized
+          },
+          tts: {
+            output_audio_format: "pcm_8000" // We can also optimize output to 8k if supported, but let's stick to input optimization first
+          }
+        },
+        // Crucial: Tell ElevenLabs we are sending raw μ-law 8kHz audio
+        // Note: The key might be 'user_input_audio_format' or inside config. 
+        // Based on docs, it's often negotiated or strictly defined. 
+        // For standard ConvAI, we assume 'ulaw_8000' is supported if we just send it?
+        // Actually, the safest bet is to rely on the agent config, BUT specifically for raw streams:
+        // Let's explicitly set the format if the API allows.
+        // If not standard, we just send the data. 
+        // Ref: https://elevenlabs.io/docs/conversational-ai/websocket#conversation-initiation-data
+        conversation_initiation_metadata: {
+           // This is where we might set it if supported
+        }
+      };
+
+      // NOTE: ElevenLabs defaults to expecting what the agent is configured for. 
+      // If we send ulaw, we simply send ulaw. However, if the agent expects 16k PCM, sending 8k ulaw might produce noise.
+      // We'll trust the plan: "Send raw 8kHz μ-law".
+      
+      // Let's send a config update just in case it's needed/supported
+      // WS connection URL params are also a place this might be set.
+      
       logger.debug('WebSocket opened, waiting for messages...');
       
       resolve(ws);

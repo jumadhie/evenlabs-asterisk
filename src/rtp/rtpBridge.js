@@ -132,15 +132,20 @@ class RTPBridge {
     const { sessionId, websocket } = session;
 
     // Handle incoming audio from Asterisk (via RTP)
-    this.rtpServer.on('audio', (sid, pcm8k) => {
+    // Handle incoming audio from Asterisk (via RTP)
+    this.rtpServer.on('audio', (sid, pcm8k, rawPayload) => {
       if (sid !== sessionId) return;
 
-      // Upsample 8kHz → 16kHz for ElevenLabs
-      const pcm16k = upsample8to16(pcm8k);
+      // OPTIMIZATION: Send raw μ-law (8kHz) directly to ElevenLabs
+      // This bypasses decoding to PCM and upsampling to 16kHz
+      
+      // Use rawPayload if available (added in recent update), otherwise fallback (shouldn't happen with new server code)
+      const audioData = rawPayload || pcm8k; 
 
       // Send to ElevenLabs via WebSocket
       if (websocket && websocket.readyState === 1) {
-        const base64Audio = pcm16k.toString('base64');
+        // Ensure it's base64 encoded
+        const base64Audio = audioData.toString('base64');
         
         websocket.send(JSON.stringify({
           user_audio_chunk: base64Audio,
