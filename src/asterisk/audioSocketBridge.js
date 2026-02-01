@@ -25,6 +25,7 @@ class AudioSocketBridge {
       return;
     }
 
+    this.host = host; // Store host for createBridge usage
     this.audioSocketServer = new AudioSocketServer(port, host);
     
     // Setup event handlers
