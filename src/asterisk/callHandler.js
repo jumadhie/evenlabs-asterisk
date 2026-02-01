@@ -164,14 +164,30 @@ async function playTTS(channel, text, tempFiles = []) {
       file: asteriskFile,
     });
 
-    // Copy file to Asterisk server via SCP
-    const { copyToAsterisk } = require('../utils/scpHelper');
-    const soundPath = await copyToAsterisk(asteriskFile);
-
-    logger.success('Starting playback from Asterisk server', {
-      channelId,
-      soundPath,
-    });
+    // Check if Asterisk is local or remote
+    const isLocalAsterisk = config.asterisk.host.includes('localhost') || 
+                           config.asterisk.host.includes('127.0.0.1');
+    
+    let soundPath;
+    
+    if (isLocalAsterisk) {
+      // Local mode: Use direct file path
+      soundPath = `sound:${asteriskFile.replace(/\.[^/.]+$/, '')}`;
+      
+      logger.success('Starting local playback', {
+        channelId,
+        soundPath,
+      });
+    } else {
+      // Remote mode: Copy file via SCP
+      const { copyToAsterisk } = require('../utils/scpHelper');
+      soundPath = await copyToAsterisk(asteriskFile);
+      
+      logger.success('Starting remote playback', {
+        channelId,
+        soundPath,
+      });
+    }
 
     try {
       const playback = await channel.play({ media: soundPath });
