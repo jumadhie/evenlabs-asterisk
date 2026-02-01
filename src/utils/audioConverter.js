@@ -19,11 +19,11 @@ async function convertToAsteriskFormat(inputPath, format = 'slin') {
     // Configure based on format
     switch (format) {
       case 'slin':
-        // Signed Linear PCM, 16-bit, mono, 8kHz (default for Asterisk)
+        // Signed Linear PCM, 16-bit, mono, 8kHz (matching ulaw for Asterisk compatibility)
         command
           .audioCodec('pcm_s16le')
           .audioChannels(1)
-          .audioFrequency(config.audio.sampleRate)
+          .audioFrequency(8000) // Fixed to 8kHz for ulaw compatibility
           .format('s16le');
         break;
 
@@ -95,7 +95,7 @@ async function convertToWav(inputPath) {
     ffmpeg(inputPath)
       .audioCodec('pcm_s16le')
       .audioChannels(1)
-      .audioFrequency(config.audio.sampleRate)
+      .audioFrequency(8000) // 8kHz for Asterisk compatibility
       .format('wav')
       .on('end', () => {
         logger.debug('MP3 to WAV conversion completed', {
