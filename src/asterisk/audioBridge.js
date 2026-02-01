@@ -101,40 +101,69 @@ class AudioBridge {
    * @param {Object} connection - Connection details
    */
   async setupAudioStreaming(connection) {
-    const { websocket, userChannel } = connection;
+    const { websocket, userChannel, externalChannel } = connection;
 
     logger.info('Setting up bidirectional audio streaming', {
-      channelId: userChannel.id,
+      channelId: externalChannel.id,
     });
 
     // Increase max listeners to prevent memory leak warning
     websocket.setMaxListeners(20);
 
-    // Handle audio FROM Asterisk TO ElevenLabs
-    externalMediaManager.onAudioReceived((audioData, rinfo) => {
-      // Store RTP endpoint for sending back
+    // Create dedicated RTP message handler for THIS connection
+    const rtpMessageHandler = (msg, rinfo) => {
+      // RTP packet structure: 12 byte header + payload
+      if (msg.length < 12) {
+        return;
+      }
+
+      // Extract audio payload (skip RTP header)
+      const audioData = msg.slice(12);
+      
+      // Store RTP endpoint for sending back (first packet only)
       if (!connection.rtpEndpoint) {
         connection.rtpEndpoint = {
           address: rinfo.address,
           port: rinfo.port,
         };
-        logger.debug('RTP endpoint detected', connection.rtpEndpoint);
+        logger.info('RTP endpoint detected for connection', {
+          channelId: externalChannel.id,
+          endpoint: `${rinfo.address}:${rinfo.port}`,
+        });
       }
 
       // Send audio to ElevenLabs via WebSocket
       if (websocket.readyState === 1) { // WebSocket.OPEN
-        // ElevenLabs expects base64 encoded PCM
-        const base64Audio = audioData.toString('base64');
-        
-        websocket.send(JSON.stringify({
-          user_audio_chunk: base64Audio,
-        }));
+        try {
+          // ElevenLabs expects base64 encoded PCM 16kHz
+          const base64Audio = audioData.toString('base64');
+          
+          websocket.send(JSON.stringify({
+            user_audio_chunk: base64Audio,
+          }));
 
-        logger.debug('Audio sent to ElevenLabs', {
-          size: audioData.length,
-        });
+          logger.debug('Audio sent to ElevenLabs', {
+            channelId: externalChannel.id,
+            bytes: audioData.length,
+          });
+        } catch (error) {
+          logger.warn('Failed to send audio to ElevenLabs', {
+            error: error.message,
+          });
+        }
       }
-    });
+    };
+
+    // Attach RTP handler for this connection
+    if (!externalMediaManager.rtpServer) {
+      logger.failure('RTP server not initialized');
+      return;
+    }
+
+    externalMediaManager.rtpServer.on('message', rtpMessageHandler);
+    
+    // Store handler reference for cleanup
+    connection.rtpMessageHandler = rtpMessageHandler;
 
     // Handle audio FROM ElevenLabs TO Asterisk
     const messageHandler = (data) => {
@@ -144,6 +173,11 @@ class AudioBridge {
         if (message.audio) {
           // Decode base64 audio from ElevenLabs
           const audioBuffer = Buffer.from(message.audio, 'base64');
+
+          logger.debug('Audio received from ElevenLabs', {
+            channelId: externalChannel.id,
+            bytes: audioBuffer.length,
+          });
 
           // Send to Asterisk via RTP if endpoint known
           if (connection.rtpEndpoint) {
@@ -159,8 +193,12 @@ class AudioBridge {
             );
 
             logger.debug('Audio sent to Asterisk', {
-              size: audioBuffer.length,
+              channelId: externalChannel.id,
+              bytes: audioBuffer.length,
+              seq: connection.sequenceNumber,
             });
+          } else {
+            logger.warn('RTP endpoint not yet detected, dropping audio');
           }
         }
 
@@ -192,10 +230,16 @@ class AudioBridge {
       logger.info('WebSocket closed', {
         conversationId: connection.conversationId,
       });
-      // Cleanup on close
+      
+      // Cleanup listeners
       websocket.removeListener('message', messageHandler);
       websocket.removeListener('error', errorHandler);
       websocket.removeListener('close', closeHandler);
+      
+      // Remove RTP handler
+      if (connection.rtpMessageHandler && externalMediaManager.rtpServer) {
+        externalMediaManager.rtpServer.removeListener('message', connection.rtpMessageHandler);
+      }
     };
 
     websocket.on('message', messageHandler);

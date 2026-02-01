@@ -88,36 +88,6 @@ class ExternalMediaManager {
   }
 
   /**
-   * Handle incoming RTP packets
-   * @param {Function} callback - Called with audio data
-   */
-  onAudioReceived(callback) {
-    if (!this.rtpServer) {
-      throw new Error('RTP server not initialized');
-    }
-
-    this.rtpServer.on('message', (msg, rinfo) => {
-      // RTP packet structure:
-      // - Header: 12 bytes
-      // - Payload: audio data
-      
-      if (msg.length < 12) {
-        return; // Invalid RTP packet
-      }
-
-      // Extract audio payload (skip RTP header)
-      const audioData = msg.slice(12);
-      
-      logger.debug('RTP packet received', {
-        from: `${rinfo.address}:${rinfo.port}`,
-        size: audioData.length,
-      });
-
-      callback(audioData, rinfo);
-    });
-  }
-
-  /**
    * Send audio data as RTP packet
    * @param {Buffer} audioData - PCM audio data
    * @param {string} host - Destination host
