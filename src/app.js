@@ -137,9 +137,12 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
+  console.error('UNCAUGHT EXCEPTION:', error);
   logger.failure('Uncaught exception', {
-    error: error.message,
+    error: error.message || String(error),
     stack: error.stack,
+    type: error.constructor?.name,
+    fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
   });
   process.exit(1);
 });
