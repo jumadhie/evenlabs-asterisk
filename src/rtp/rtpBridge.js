@@ -147,21 +147,13 @@ class RTPBridge {
         return;
       }
 
-      let base64Audio;
-      let outputBytes;
-
       const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
 
-      if (audioMode === 'ulaw_8000' && rawPayload) {
-        // Optimization: Pass raw μ-law directly
-        base64Audio = rawPayload.toString('base64');
-        outputBytes = rawPayload.length;
-      } else {
-        // Default: Upsample 8kHz → 16kHz for ElevenLabs PCM
-        const pcm16k = upsample8to16(pcm8k);
-        base64Audio = pcm16k.toString('base64');
-        outputBytes = pcm16k.length;
-      }
+      // Always Upsample 8kHz → 16kHz for ElevenLabs Input
+      // (ElevenLabs works best with PCM 16k input, even if output is μ-law)
+      const pcm16k = upsample8to16(pcm8k);
+      base64Audio = pcm16k.toString('base64');
+      outputBytes = pcm16k.length;
 
       // Send to ElevenLabs via WebSocket
       if (websocket && websocket.readyState === 1) {
