@@ -69,8 +69,10 @@ class RTPServer extends EventEmitter {
     });
   }
 
-  handleRTPPacket(sessionId, packet) {
-    if (packet.length < 12) return;
+    // Parse RTP header
+    const payloadType = packet[1] & 0x7F;
+    const sequenceNumber = packet.readUInt16BE(2);
+    const timestamp = packet.readUInt32BE(4);
 
     const payload = packet.slice(12);
     
@@ -80,10 +82,22 @@ class RTPServer extends EventEmitter {
     // Convert to Buffer for compatibility with resampling
     const pcm = Buffer.from(decoded.buffer);
 
+    // Calculate RMS to check if audio is silence
+    let sum = 0;
+    for (let i = 0; i < pcm.length; i += 2) {
+      const sample = pcm.readInt16LE(i);
+      sum += sample * sample;
+    }
+    const rms = Math.sqrt(sum / (pcm.length / 2));
+
     logger.debug('RTP packet received', {
       sessionId,
+      pt: payloadType,
+      seq: sequenceNumber,
+      ts: timestamp,
       payloadBytes: payload.length,
       pcmBytes: pcm.length,
+      rms: Math.round(rms),
     });
 
     this.emit('audio', sessionId, pcm);
