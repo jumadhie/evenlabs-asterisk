@@ -124,9 +124,10 @@ class AudioBridge {
       try {
         const message = JSON.parse(data.toString());
 
-        if (message.audio) {
+        // Handle audio from ElevenLabs (comes as audio_event.audio_base_64)
+        if (message.audio_event?.audio_base_64) {
           // Decode base64 audio from ElevenLabs (PCM 16kHz)
-          const pcm16k = Buffer.from(message.audio, 'base64');
+          const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
 
           logger.debug('Audio received from ElevenLabs', {
             channelId: externalChannel.id,
