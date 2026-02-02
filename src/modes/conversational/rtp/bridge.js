@@ -158,14 +158,14 @@ class RTPBridge {
       // === ZERO-LATENCY STATE LOGIC ===
       
       const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
-      const DRAIN_TIME = 200; // 200ms quick drain
+      const DRAIN_TIME = 1000; // Increased to 1s to cover network latency
       
       // 1. Check Output Drain (Echo Guard)
       // If agent is speaking or just finished, we assume this input is echo.
       if (session.isAgentSpeaking || (Date.now() - session.lastAgentAudioTime < DRAIN_TIME)) {
           
-          // Barge-In Exception: Only if very loud
-          if (rms > 3000) {
+          // Barge-In Exception: Lower threshold for easier interruption
+          if (rms > 800) {
               // INTERRUPT
               session.audioBuffer = Buffer.alloc(0); // Clear agent buffer
               session.isPlaying = false;
