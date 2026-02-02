@@ -102,6 +102,10 @@ class RTPBridge {
         userChannel,
         externalMediaChannel,
         isAgentSpeaking: false, // Track agent speech state
+        isPlaying: false, // Track if currently playing audio
+        lastAgentAudioTime: 0, // Timestamp of last agent audio sent
+        audioBuffer: Buffer.alloc(0), // Buffer for agent audio
+        isClosed: false, // Track if session is closed
       };
 
       this.activeSessions.set(sessionId, session);
@@ -134,38 +138,59 @@ class RTPBridge {
     const { sessionId, websocket } = session;
 
     // Handle incoming audio from Asterisk (via RTP)
-    // Handle incoming audio from Asterisk (via RTP)
     this.rtpServer.on('audio', (sid, pcm8k, rawPayload, rms) => {
       if (sid !== sessionId) return;
 
-      // Barge-In / Interruption Logic
-      // If agent is speaking but user speaks loudly (RMS > Threshold), stop agent and let user through
-      const BARGE_IN_THRESHOLD = parseInt(process.env.BARGE_IN_THRESHOLD) || 2000;
+      // === FIX 1: Echo Delay Protection ===
+      // When we send audio TO the user, it travels through the mixing bridge
+      // and can be captured back as "user input" creating a feedback loop.
+      // Block audio for ECHO_DELAY_MS after last agent audio to prevent this.
+      const ECHO_DELAY_MS = parseInt(process.env.ECHO_DELAY_MS) || 300;
+      const timeSinceAgentAudio = Date.now() - (session.lastAgentAudioTime || 0);
       
-      if (session.isAgentSpeaking) {
-        if (rms > BARGE_IN_THRESHOLD) {
-           logger.info('🗣️ Barge-in detected! Stopping playback.', { sessionId, rms });
-           
-           // 1. Clear Playback Buffer (Stop agent voice immediately)
-           session.audioBuffer = Buffer.alloc(0);
-           session.isPlaying = false;
-           session.isAgentSpeaking = false; 
+      if (timeSinceAgentAudio < ECHO_DELAY_MS) {
+        logger.debug('Blocking potential echo audio', {
+          sessionId,
+          timeSinceAgentAudio,
+          threshold: ECHO_DELAY_MS,
+        });
+        return; // Skip - this is likely echoed agent audio
+      }
 
-           // 2. Send explicit interrupt (optional, but ensures ElevenLabs stops generating)
-           // Sending audio usually triggers it, but we want to be sure.
+      // === FIX 2: Playback State Lock ===
+      // Don't send audio while we're actively playing agent response
+      // This prevents the agent from hearing itself
+      if (session.isPlaying) {
+        // Only allow through if it's a strong barge-in signal
+        const BARGE_IN_THRESHOLD = parseInt(process.env.BARGE_IN_THRESHOLD) || 2500;
+        
+        if (rms > BARGE_IN_THRESHOLD) {
+          logger.info('🗣️ Barge-in detected! Stopping playback.', { sessionId, rms });
+          
+          // Clear Playback Buffer (Stop agent voice immediately)
+          session.audioBuffer = Buffer.alloc(0);
+          session.isPlaying = false;
+          session.isAgentSpeaking = false;
+          session.lastAgentAudioTime = 0; // Reset to allow immediate user audio
         } else {
-           // User is silent/background noise -> Ignore (Half-Duplex)
-           return;
+          // User is silent/background noise -> Ignore (Half-Duplex)
+          return;
         }
+      }
+
+      // === FIX 3: Silence Detection ===
+      // Don't send near-silent audio (likely background noise or echo remnants)
+      const SILENCE_THRESHOLD = parseInt(process.env.SILENCE_THRESHOLD) || 150;
+      if (rms < SILENCE_THRESHOLD) {
+        logger.debug('Skipping silent audio', { sessionId, rms });
+        return;
       }
 
       const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
 
       // Always Upsample 8kHz → 16kHz for ElevenLabs Input
-      // (ElevenLabs works best with PCM 16k input, even if output is μ-law)
       const pcm16k = upsample8to16(pcm8k);
       const base64Audio = pcm16k.toString('base64');
-      const outputBytes = pcm16k.length;
 
       // Send to ElevenLabs via WebSocket
       if (websocket && websocket.readyState === 1) {
@@ -177,7 +202,8 @@ class RTPBridge {
           sessionId,
           mode: audioMode,
           inputBytes: pcm8k.length,
-          outputBytes: outputBytes,
+          outputBytes: pcm16k.length,
+          rms: Math.round(rms),
         });
       }
     });
@@ -226,6 +252,10 @@ class RTPBridge {
 
              const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
              rtpServer.sendAudio(session.sessionId, chunk);
+             
+             // === FIX: Track when agent audio was sent ===
+             session.lastAgentAudioTime = Date.now();
+             
              offset += CHUNK_SIZE;
              packetCount++;
 
