@@ -87,8 +87,7 @@ class RTPBridge {
       
       // Snoop channel: Spies on USER, direction=IN (from Mic only)
       const snoopId = `snoop-${uuidv4()}`;
-      const snoopChannel = await client.Channel().snoop({
-          channelId: userChannel.id,
+      const snoopChannel = await userChannel.snoop({
           app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
           spy: 'in', // CRITICAL: Only spy on input (mic), ignore output (speaker)
           snoopId: snoopId
