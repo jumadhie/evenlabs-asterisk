@@ -30,8 +30,7 @@ function downsample16to8(pcm16k) {
 
 /**
  * Calculate RMS (Root Mean Square) of PCM audio buffer
- * @param {Buffer} pcmBuffer - 16-bit PCM audio
- * @returns {number} - RMS amplitude
+ * Used for simple silence detection and barge-in
  */
 function calculateRMS(pcmBuffer) {
     let sum = 0;
@@ -109,21 +108,18 @@ class RTPBridge {
         channels: [userChannel.id, externalMediaChannel.id],
       });
 
-      // 5. Store session info
+      // 5. Store session info - Simplified State for Low Latency
       const session = {
         sessionId,
         conversationId,
         websocket: ws,
         userChannel,
         externalMediaChannel,
-        isAgentSpeaking: false, // Track agent speech state
-        isPlaying: false, // Track if currently playing audio
-        lastAgentAudioTime: 0, // Timestamp of last agent audio sent
-        lastAgentAudioEnd: 0, // Timestamp when playback queue emptied
-        playbackInterrupted: false, // Flag to track interruptions
-        audioBuffer: Buffer.alloc(0), // Buffer for agent audio
-        outputHistory: [], // Rolling buffer of {timestamp, rms} for echo analysis
-        isClosed: false, // Track if session is closed
+        isAgentSpeaking: false,
+        isPlaying: false, 
+        lastAgentAudioTime: 0,
+        audioBuffer: Buffer.alloc(0),
+        isClosed: false,
       };
 
       this.activeSessions.set(sessionId, session);
@@ -159,109 +155,40 @@ class RTPBridge {
     this.rtpServer.on('audio', (sid, pcm8k, rawPayload, rms) => {
       if (sid !== sessionId) return;
 
-      // === FIX 1: Adaptive Echo Suppression (Smart AEC) ===
-      // Instead of hardcoded blocking, we analyze the correlation between 
-      // recent agent output volume and current input volume.
+      // === ZERO-LATENCY STATE LOGIC ===
       
-      const now = Date.now();
-      
-      // 1. Cleanup old history (keep last 1000ms)
-      if (session.outputHistory.length > 50) { // Optimization: don't filter every packet
-          session.outputHistory = session.outputHistory.filter(h => now - h.timestamp < 1000);
-      }
-
-      // 2. Find max agent volume in the "echo window"
-      // Echo usually arrives 50ms - 500ms after output
-      const ECHO_MIN_DELAY = 20;
-      const ECHO_WINDOW = 800;
-      
-      const relevantOutput = session.outputHistory.filter(h => {
-          const age = now - h.timestamp;
-          return age > ECHO_MIN_DELAY && age < ECHO_WINDOW;
-      });
-      
-      const maxAgentRMS = relevantOutput.reduce((max, h) => Math.max(max, h.rms), 0);
-      
-      // 3. Calculate Dynamic Threshold
-      // If Agent is loud, we expect loud echo. Threshold attempts to be just above the echo level.
-      // ECHO_FACTOR: How much of the output signal returns as echo? (0.5 = 50%)
-      const ECHO_FACTOR = parseFloat(process.env.ECHO_FACTOR) || 0.4; 
-      const NOISE_FLOOR = parseInt(process.env.SILENCE_THRESHOLD) || 200;
-      
-      const dynamicThreshold = (maxAgentRMS * ECHO_FACTOR) + NOISE_FLOOR;
-      
-      // 4. Smart Block
-      if (rms < dynamicThreshold) {
-           // This is likely echo or background noise
-           if (maxAgentRMS > 500) {
-               logger.debug('SUPPRESSED ECHO', { 
-                   sid, 
-                   inRMS: Math.round(rms), 
-                   agentRMS: Math.round(maxAgentRMS), 
-                   thresh: Math.round(dynamicThreshold) 
-               });
-           }
-           return; 
-      }
-      
-      // If we pass the threshold, it is likely USER INTERRUPT.
-      // But we still apply a small safety margin if agent is VERY loud
-      if (session.isPlaying && maxAgentRMS > 4000 && rms < 3000) {
-          // Double safety for loud agent segments
-           return;
-      }
-
-      // === FIX 2: Playback State Lock (Modified for Adaptive Logic) ===
-
-      // === FIX 2: Playback State Lock ===
-      // Don't send audio while we're actively playing agent response
-      // This prevents the agent from hearing itself
-      if (session.isPlaying) {
-        // Only allow through if it's a strong barge-in signal
-        const BARGE_IN_THRESHOLD = parseInt(process.env.BARGE_IN_THRESHOLD) || 2500;
-        
-        if (rms > BARGE_IN_THRESHOLD) {
-          logger.info('🗣️ Barge-in detected! Stopping playback.', { sessionId, rms });
-          
-          // Clear Playback Buffer (Stop agent voice immediately)
-          session.audioBuffer = Buffer.alloc(0);
-          session.isPlaying = false;
-          session.isAgentSpeaking = false;
-          session.lastAgentAudioTime = 0; // Reset to allow immediate user audio
-          session.playbackInterrupted = true; // Mark as interrupted so we don't block input
-        } else {
-          // User is silent/background noise -> Ignore (Half-Duplex)
-          return;
-        }
-      }
-
-      // === FIX 3: Silence Detection ===
-      // Don't send near-silent audio (likely background noise or echo remnants)
-      const SILENCE_THRESHOLD = parseInt(process.env.SILENCE_THRESHOLD) || 150;
-      if (rms < SILENCE_THRESHOLD) {
-        logger.debug('Skipping silent audio', { sessionId, rms });
-        return;
-      }
-
       const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
+      const DRAIN_TIME = 200; // 200ms quick drain
+      
+      // 1. Check Output Drain (Echo Guard)
+      // If agent is speaking or just finished, we assume this input is echo.
+      if (session.isAgentSpeaking || (Date.now() - session.lastAgentAudioTime < DRAIN_TIME)) {
+          
+          // Barge-In Exception: Only if very loud
+          if (rms > 3000) {
+              // INTERRUPT
+              session.audioBuffer = Buffer.alloc(0); // Clear agent buffer
+              session.isPlaying = false;
+              session.isAgentSpeaking = false;
+              // Pass through...
+          } else {
+              // BLOCK (Drop packet)
+              return;
+          }
+      }
 
-      // Always Upsample 8kHz → 16kHz for ElevenLabs Input
+      // 2. Silence Filter
+      if (rms < 150) return;
+
+      // 3. Fast Forward
+      // Use raw packet if possible, but EL needs 16kHz
       const pcm16k = upsample8to16(pcm8k);
       const base64Audio = pcm16k.toString('base64');
 
-      // Send to ElevenLabs via WebSocket
       if (websocket && websocket.readyState === 1) {
         websocket.send(JSON.stringify({
           user_audio_chunk: base64Audio,
         }));
-
-        logger.debug('Audio sent to ElevenLabs', {
-          sessionId,
-          mode: audioMode,
-          inputBytes: pcm8k.length,
-          outputBytes: pcm16k.length,
-          rms: Math.round(rms),
-        });
       }
     });
   }
@@ -273,7 +200,6 @@ class RTPBridge {
     const { websocket, sessionId } = session;
     let { conversationId } = session;
 
-    // Helper: Sequential Playback with Drift Correction
     const startPlayback = (session, rtpServer) => {
         session.isPlaying = true;
         session.isAgentSpeaking = true;
@@ -287,53 +213,31 @@ class RTPBridge {
         const sendNextChunk = () => {
              if (session.isClosed) return;
 
-             // Check if we have enough data left
+             // Buffer underrun check
              if (!session.audioBuffer || offset + CHUNK_SIZE > session.audioBuffer.length) {
-                 // Buffer underrun or end of stream
-                 // Remove played portion
                  if (session.audioBuffer) {
                     session.audioBuffer = session.audioBuffer.slice(offset);
                  }
                  
+                 // Queue empty?
                  if (!session.audioBuffer || session.audioBuffer.length === 0) {
-                     logger.debug('Playback queue drained/complete', { sessionId: session.sessionId });
                      session.isPlaying = false;
                      session.isAgentSpeaking = false; 
-                     
-                     if (!session.playbackInterrupted) {
-                         session.lastAgentAudioEnd = Date.now();
-                     } else {
-                         session.playbackInterrupted = false;
-                     }
                      return;
                  }
                  
+                 // Stop state
                  session.isPlaying = false;
                  session.isAgentSpeaking = false; 
-                 
-                 if (!session.playbackInterrupted) {
-                     session.lastAgentAudioEnd = Date.now();
-                 } else {
-                     session.playbackInterrupted = false;
-                 }
                  return;
              }
 
              const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
-             
-             // Calculate RMS for Adaptive Echo Cancellation
-             const outputRMS = calculateRMS(chunk);
-             if (session.outputHistory) {
-                 session.outputHistory.push({
-                     timestamp: Date.now(),
-                     rms: outputRMS
-                 });
-             }
-             
              rtpServer.sendAudio(session.sessionId, chunk);
              
-             // === FIX: Track when agent audio was sent ===
+             // Update State
              session.lastAgentAudioTime = Date.now();
+             session.isAgentSpeaking = true;
              
              offset += CHUNK_SIZE;
              packetCount++;
@@ -353,59 +257,34 @@ class RTPBridge {
       try {
         const message = JSON.parse(data);
 
-        // Update conversation ID from ElevenLabs if provided
         if (message.conversation_initiation_metadata_event?.conversation_id) {
-          const realConversationId = message.conversation_initiation_metadata_event.conversation_id;
-          
-          logger.info('🔄 Updating conversation ID from ElevenLabs', {
-            oldId: conversationId,
-            newId: realConversationId,
-          });
-          
-          conversationId = realConversationId;
-          session.conversationId = realConversationId;
+          conversationId = message.conversation_initiation_metadata_event.conversation_id;
+          session.conversationId = conversationId;
         }
 
-        // Handle audio from ElevenLabs
         if (message.audio_event?.audio_base_64) {
-          // Handle audio based on configured mode
           const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
           let pcm8k;
 
           if (audioMode === 'ulaw_8000') {
-            // Case: ulaw_8000 (raw μ-law bytes)
-            // Need to decode to PCM 8kHz because rtpServer expects PCM input (it re-encodes)
-            // TODO: Optimization - Add rtpServer.sendRawAudio() to avoid decode/encode cycle
              const ulawData = Buffer.from(message.audio_event.audio_base_64, 'base64');
              const decoded = alawmulaw.mulaw.decode(ulawData);
              pcm8k = Buffer.from(decoded.buffer);
           } else {
-             // Case: pcm_16000 (PCM 16kHz)
-             // Default behavior: Downsample 16kHz → 8kHz
              const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
              pcm8k = downsample16to8(pcm16k);
           }
 
-          // Append to session audio buffer
           if (!session.audioBuffer) {
             session.audioBuffer = Buffer.alloc(0);
           }
           session.audioBuffer = Buffer.concat([session.audioBuffer, pcm8k]);
           
-          // Start playback if not running
           if (!session.isPlaying) {
              startPlayback(session, this.rtpServer);
           }
-
-          logger.info('🎵 Audio buffered', {
-            sessionId,
-            addedBytes: pcm8k.length,
-            totalBuffered: session.audioBuffer.length,
-            isPlaying: session.isPlaying
-          });
         }
 
-        // Handle agent response text
         if (message.agent_response_event?.agent_response) {
           logger.info('💬 Agent response', {
             sessionId,
@@ -422,18 +301,11 @@ class RTPBridge {
     });
 
     websocket.on('error', (error) => {
-      logger.error('WebSocket error', {
-        error: error.message,
-        sessionId,
-      });
+      logger.error('WebSocket error', { error: error.message, sessionId });
     });
 
     websocket.on('close', (code, reason) => {
-      logger.warn('WebSocket connection closed', {
-        sessionId,
-        code,
-        reason: reason.toString(),
-      });
+      logger.warn('WebSocket closed', { sessionId, code });
     });
   }
 
@@ -447,22 +319,16 @@ class RTPBridge {
       if (session.userChannel.id === channelId || 
           session.externalMediaChannel.id === channelId) {
         
-        // Close WebSocket
         if (session.websocket && session.websocket.readyState === 1) {
           session.websocket.close();
         }
 
-        // End ElevenLabs conversation
         endConversation(session.conversationId);
 
-        // Mark session as closed to stop playback loop
         session.isClosed = true;
         session.isPlaying = false;
 
-        // Close RTP session
         this.rtpServer.closeSession(sessionId);
-
-        // Remove from active sessions
         this.activeSessions.delete(sessionId);
 
         logger.success('RTP bridge cleaned up', { channelId, sessionId });
