@@ -2,6 +2,7 @@ const logger = require('../../utils/logger');
 const config = require('../../config/config');
 const { generateSpeech } = require('./elevenlabs');
 const audioFileServer = require('./fileServer');
+const { convertToAsteriskFormat, cleanupAudioFiles } = require('../../utils/audioConverter');
 const path = require('path');
 const fs = require('fs');
 
@@ -182,7 +183,7 @@ async function playTTS(channel, text, tempFiles = []) {
       });
     } else {
       // Remote mode: Copy file via SCP
-      const { copyToAsterisk } = require('../utils/scpHelper');
+      const { copyToAsterisk } = require('../../utils/scpHelper');
       soundPath = await copyToAsterisk(asteriskFile);
       
       logger.success('Starting remote playback', {
