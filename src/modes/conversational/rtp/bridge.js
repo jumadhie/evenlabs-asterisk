@@ -104,6 +104,8 @@ class RTPBridge {
         isAgentSpeaking: false, // Track agent speech state
         isPlaying: false, // Track if currently playing audio
         lastAgentAudioTime: 0, // Timestamp of last agent audio sent
+        lastAgentAudioEnd: 0, // Timestamp when playback queue emptied
+        playbackInterrupted: false, // Flag to track interruptions
         audioBuffer: Buffer.alloc(0), // Buffer for agent audio
         isClosed: false, // Track if session is closed
       };
@@ -145,13 +147,17 @@ class RTPBridge {
       // When we send audio TO the user, it travels through the mixing bridge
       // and can be captured back as "user input" creating a feedback loop.
       // Block audio for ECHO_DELAY_MS after last agent audio to prevent this.
-      const ECHO_DELAY_MS = parseInt(process.env.ECHO_DELAY_MS) || 300;
+      // INCREASED to 800ms to account for network latency + jitter buffer
+      const ECHO_DELAY_MS = parseInt(process.env.ECHO_DELAY_MS) || 800;
       const timeSinceAgentAudio = Date.now() - (session.lastAgentAudioTime || 0);
+      const timeSincePlaybackEnd = Date.now() - (session.lastAgentAudioEnd || 0);
       
-      if (timeSinceAgentAudio < ECHO_DELAY_MS) {
+      // Block if agent is speaking OR was speaking recently (within ECHO_DELAY_MS)
+      if (timeSinceAgentAudio < ECHO_DELAY_MS || timeSincePlaybackEnd < ECHO_DELAY_MS) {
         logger.debug('Blocking potential echo audio', {
           sessionId,
           timeSinceAgentAudio,
+          timeSincePlaybackEnd,
           threshold: ECHO_DELAY_MS,
         });
         return; // Skip - this is likely echoed agent audio
@@ -172,6 +178,7 @@ class RTPBridge {
           session.isPlaying = false;
           session.isAgentSpeaking = false;
           session.lastAgentAudioTime = 0; // Reset to allow immediate user audio
+          session.playbackInterrupted = true; // Mark as interrupted so we don't block input
         } else {
           // User is silent/background noise -> Ignore (Half-Duplex)
           return;
@@ -242,11 +249,23 @@ class RTPBridge {
                      logger.debug('Playback queue drained/complete', { sessionId: session.sessionId });
                      session.isPlaying = false;
                      session.isAgentSpeaking = false; 
+                     
+                     if (!session.playbackInterrupted) {
+                         session.lastAgentAudioEnd = Date.now();
+                     } else {
+                         session.playbackInterrupted = false;
+                     }
                      return;
                  }
                  
                  session.isPlaying = false;
                  session.isAgentSpeaking = false; 
+                 
+                 if (!session.playbackInterrupted) {
+                     session.lastAgentAudioEnd = Date.now();
+                 } else {
+                     session.playbackInterrupted = false;
+                 }
                  return;
              }
 
