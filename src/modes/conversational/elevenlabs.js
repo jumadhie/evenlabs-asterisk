@@ -74,8 +74,9 @@ async function connectToAgent(agentId) {
       clearTimeout(connectionTimeout);
       logger.success('WebSocket connection established', { agentId });
       
-      // Dynamic configuration based on env
-      const outputFormat = config.elevenlabs.outputFormat;
+      // Dynamic configuration based on audio mode
+      const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
+      const outputFormat = audioMode === 'ulaw_8000' ? 'ulaw_8000' : 'pcm_16000';
 
       const initMessage = {
         type: "conversation_initiation_client_data",

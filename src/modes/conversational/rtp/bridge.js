@@ -159,18 +159,13 @@ class RTPBridge {
         }
       }
 
-      // Handle Audio Input (User -> ElevenLabs)
-      const inputFormat = config.elevenlabs.inputFormat;
-      let base64Audio;
+      const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
 
-      if (inputFormat === 'pcm_8000') {
-        // Send raw 8kHz PCM
-        base64Audio = pcm8k.toString('base64');
-      } else {
-        // Default: Upsample to 16kHz (Standard)
-        const pcm16k = upsample8to16(pcm8k);
-        base64Audio = pcm16k.toString('base64');
-      }
+      // Always Upsample 8kHz → 16kHz for ElevenLabs Input
+      // (ElevenLabs works best with PCM 16k input, even if output is μ-law)
+      const pcm16k = upsample8to16(pcm8k);
+      const base64Audio = pcm16k.toString('base64');
+      const outputBytes = pcm16k.length;
 
       // Send to ElevenLabs via WebSocket
       if (websocket && websocket.readyState === 1) {
@@ -180,8 +175,9 @@ class RTPBridge {
 
         logger.debug('Audio sent to ElevenLabs', {
           sessionId,
-          format: inputFormat,
-          bytes: base64Audio.length,
+          mode: audioMode,
+          inputBytes: pcm8k.length,
+          outputBytes: outputBytes,
         });
       }
     });
@@ -264,12 +260,13 @@ class RTPBridge {
         // Handle audio from ElevenLabs
         if (message.audio_event?.audio_base_64) {
           // Handle audio based on configured mode
-          const outputFormat = config.elevenlabs.outputFormat;
+          const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
           let pcm8k;
 
-          if (outputFormat === 'ulaw_8000') {
+          if (audioMode === 'ulaw_8000') {
             // Case: ulaw_8000 (raw μ-law bytes)
             // Need to decode to PCM 8kHz because rtpServer expects PCM input (it re-encodes)
+            // TODO: Optimization - Add rtpServer.sendRawAudio() to avoid decode/encode cycle
              const ulawData = Buffer.from(message.audio_event.audio_base_64, 'base64');
              const decoded = alawmulaw.mulaw.decode(ulawData);
              pcm8k = Buffer.from(decoded.buffer);
