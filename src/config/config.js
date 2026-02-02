@@ -14,6 +14,7 @@ const config = {
   elevenlabs: {
     apiKey: process.env.ELEVENLABS_API_KEY,
     voiceId: process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM',
+    agentId: process.env.ELEVENLABS_AGENT_ID,
     inputFormat: process.env.ELEVENLABS_INPUT_FORMAT || 'pcm_16000',
     outputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT || 'ulaw_8000', // ulaw_8000 is safer for telephony
     // Legacy support (optional, can be removed if not used)
