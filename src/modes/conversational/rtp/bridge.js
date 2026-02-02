@@ -29,18 +29,29 @@ function downsample16to8(pcm16k) {
 }
 
 /**
+ * Calculate RMS (Root Mean Square) for Dynamic Threshold
+ */
+function calculateRMS(pcmBuffer) {
+    let sum = 0;
+    for (let i = 0; i < pcmBuffer.length; i += 2) {
+        if (i + 1 >= pcmBuffer.length) break;
+        const sample = pcmBuffer.readInt16LE(i);
+        sum += sample * sample;
+    }
+    return Math.sqrt(sum / (pcmBuffer.length / 2));
+}
+
+/**
  * RTP Bridge for ElevenLabs Conversational AI
- * SPLIT-PATH ARCHITECTURE (SNOOP EDITION)
+ * ARCHITECTURE: Mixing Bridge + Dynamic Threshold (Peak Hold)
  * 
- * Path 1 (TX): Agent -> RTP(TX) -> ExtMedia(TX) -> Bridge(User) -> User Speaker
- * Path 2 (RX): User Mic -> Snoop(Spy='in') -> Bridge(Snoop) -> ExtMedia(RX) -> RTP(RX) -> Agent
- * 
- * Result: 0% Acoustic Echo, 100% Full Duplex.
+ * Reverted to Mixing Bridge because 'Snoop' API is unavailable in this ARI client version.
+ * Implements "Peak Hold" software logic to solve racing/echo.
  */
 class RTPBridge {
   constructor(rtpServer) {
     this.rtpServer = rtpServer;
-    this.activeSessions = new Map(); // sessionId -> { conversation, websocket, ... }
+    this.activeSessions = new Map(); // sessionId -> session
   }
 
   /**
@@ -48,7 +59,7 @@ class RTPBridge {
    */
   async createBridge(client, userChannel, agentId) {
     try {
-      logger.info('Creating Split-Path RTP bridge (Snoop Mode)', {
+      logger.info('Creating RTP bridge (Dynamic Mixed Mode)', {
         channelId: userChannel.id,
         agentId,
       });
@@ -58,82 +69,55 @@ class RTPBridge {
       const ws = conversation.websocket;
       let conversationId = conversation.conversation_id;
 
-      // 2. Setup TX Path (Agent Speaking)
-      // Standard mixing bridge so User can hear Agent
-      const txSessionInfo = await this.rtpServer.createSession();
-      const txSessionId = txSessionInfo.sessionId;
-      
-      const txChannel = await client.Channel().externalMedia({
+      // 2. Create RTP session
+      const { sessionId, localPort } = await this.rtpServer.createSession();
+
+      // 3. Create ExternalMedia channel
+      const externalMediaChannel = await client.Channel().externalMedia({
         app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
-        external_host: `127.0.0.1:${txSessionInfo.localPort}`,
+        external_host: `127.0.0.1:${localPort}`,
         format: 'ulaw',
-        channelId: `rtp-tx-${uuidv4()}`,
+        channelId: `rtp-ext-${uuidv4()}`,
       });
 
-      const mediaBridge = await client.Bridge().create({ type: 'mixing', name: `bridge-tx-${uuidv4()}` });
-      await mediaBridge.addChannel({ channel: [userChannel.id, txChannel.id] });
+      // 4. Create mixing bridge
+      const bridge = await client.Bridge().create({ type: 'mixing', name: `bridge-${sessionId}` });
+      await bridge.addChannel({ channel: [userChannel.id, externalMediaChannel.id] });
 
-      // 3. Setup RX Path (Agent Listening)
-      // Isolate User Mic using Snoop (Spy='in') to bypass Echo
-      const rxSessionInfo = await this.rtpServer.createSession();
-      const rxSessionId = rxSessionInfo.sessionId;
+      logger.success('Bridge created', { sessionId, bridgeId: bridge.id });
 
-      const rxChannel = await client.Channel().externalMedia({
-        app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
-        external_host: `127.0.0.1:${rxSessionInfo.localPort}`,
-        format: 'ulaw',
-        channelId: `rtp-rx-${uuidv4()}`,
-      });
-      
-      // Snoop channel: Spies on USER, direction=IN (from Mic only)
-      const snoopId = `snoop-${uuidv4()}`;
-      const snoopChannel = await userChannel.snoop({
-          app: process.env.ASTERISK_APP_NAME || 'elevenlabs-agent',
-          spy: 'in', // CRITICAL: Only spy on input (mic), ignore output (speaker)
-          snoopId: snoopId
-      });
-
-      // Bridge for Snoop -> RX
-      const snoopBridge = await client.Bridge().create({ type: 'mixing', name: `bridge-rx-${uuidv4()}` });
-      await snoopBridge.addChannel({ channel: [snoopChannel.id, rxChannel.id] });
-
-      logger.success('Split-Path Infrastructure Ready', {
-        txSessionId,
-        rxSessionId,
-        snoopId
-      });
-
-      // 4. Store session info
+      // 5. Store session info
       const session = {
-        sessionId: txSessionId, // Primary ID
-        txSessionId,
-        rxSessionId,
+        sessionId,
         conversationId,
         websocket: ws,
-        
         userChannel,
-        txChannel,
-        rxChannel,
-        snoopChannel,
-        mediaBridge,
-        snoopBridge,
+        externalMediaChannel,
+        mediaBridge: bridge,
         
-        // Playback State
+        // State
         audioBuffer: Buffer.alloc(0),
         isPlaying: false,
+        isAgentSpeaking: false,
         isClosed: false,
+        
+        // Dynamic Threshold State
+        lastAgentAudioTime: 0,
+        currentAgentRMS: 0,
+        peakAgentRMS: 0,
+        playbackInterrupted: false
       };
 
-      this.activeSessions.set(txSessionId, session);
-      this.activeSessions.set(rxSessionId, session); // Map both IDs to same session
+      this.activeSessions.set(sessionId, session);
 
-      // 5. Setup Handlers
-      this.setupSplitHandlers(session);
+      // 6. Setup Handlers
+      this.setupRTPHandlers(session);
+      this.setupWebSocketHandlers(session);
 
       return session;
 
     } catch (error) {
-      logger.error('Failed to create Split-Path bridge', {
+      logger.error('Failed to create RTP bridge', {
         error: error.message,
         stack: error.stack,
       });
@@ -141,71 +125,122 @@ class RTPBridge {
     }
   }
 
-  setupSplitHandlers(session) {
-    const { txSessionId, rxSessionId, websocket } = session;
+  setupRTPHandlers(session) {
+    const { sessionId, websocket } = session;
 
-    // --- RX HANDLER (User -> Agent) ---
-    // Listen to rxSession (Clean Mic Audio via Snoop)
     this.rtpServer.on('audio', (sid, pcm8k, rawPayload, rms) => {
-        if (sid !== rxSessionId) return; // Only process RX session
+      if (sid !== sessionId) return;
 
-        // No Echo Guard needed. It's clean.
-        // No Threshold needed (optional, just silence filter).
-        
-        if (rms < 100) return; // Basic silence filter
+      // === DYNAMIC THRESHOLD LOGIC (PEAK HOLD) ===
+      // Solves "Racing" (Echo) vs "Unresponsive" (Blocked User)
+      
+      const ECHO_WINDOW_MS = 1000; // 1 second echo tail
+      const MIN_THRESHOLD = 800; // Sensitive for silence (was 3000)
+      
+      let dynamicThreshold = MIN_THRESHOLD;
+      const timeSinceOutput = Date.now() - session.lastAgentAudioTime;
+      
+      if (session.isAgentSpeaking) {
+          // While agent speaks: Threshold = 80% of current output
+          // Effectively blocks self-echo
+          dynamicThreshold = Math.max(MIN_THRESHOLD, session.currentAgentRMS * 0.8);
+          // Also update peak for the echo tail
+          session.peakAgentRMS = Math.max(session.peakAgentRMS, session.currentAgentRMS);
+      } else if (timeSinceOutput < ECHO_WINDOW_MS) {
+          // Echo Tail: Threshold = 80% of PEAK output during utterance
+          dynamicThreshold = Math.max(MIN_THRESHOLD, session.peakAgentRMS * 0.8);
+      } else {
+          // Silence: High sensitivity
+          dynamicThreshold = MIN_THRESHOLD;
+      }
+      
+      // Safety Cap: Don't let threshold go impossible high (e.g. scream level)
+      // Allow user to barge-in if they yell (RMS > 4000) regardless of echo
+      if (dynamicThreshold > 4000) dynamicThreshold = 4000;
 
-        // Send to ElevenLabs
-        const pcm16k = upsample8to16(pcm8k);
-        const base64Audio = pcm16k.toString('base64');
+      // DECISION:
+      if (rms < dynamicThreshold) {
+          // Block (Echo or Silence)
+          return;
+      }
 
-        if (websocket && websocket.readyState === 1) {
-            websocket.send(JSON.stringify({
-                user_audio_chunk: base64Audio,
-            }));
-            
-            // Barge-in Logic (Optional):
-            // Since we are Full Duplex, we don't HAVE to stop the agent.
-            // But usually, we want to stop agent if user speaks loud enough.
-            if (rms > 500 && session.isPlaying) {
-                // Soft Interrupt - clear buffer so agent stops talking soon
-                session.audioBuffer = Buffer.alloc(0); 
-                session.isPlaying = false;
-            }
-        }
+      // If we are here, User is speaking (Barge-In)
+      if (session.isAgentSpeaking || timeSinceOutput < ECHO_WINDOW_MS) {
+          if (!session.playbackInterrupted) {
+             logger.info('🗣️ Barge-In Detected', { rms, threshold: dynamicThreshold });
+             session.audioBuffer = Buffer.alloc(0); // Stop agent
+             session.isPlaying = false;
+             session.isAgentSpeaking = false;
+             session.playbackInterrupted = true;
+          }
+      }
+
+      // Send to ElevenLabs
+      if (websocket && websocket.readyState === 1) {
+          const pcm16k = upsample8to16(pcm8k);
+          const base64Audio = pcm16k.toString('base64');
+          websocket.send(JSON.stringify({ user_audio_chunk: base64Audio }));
+      }
     });
+  }
 
-    // --- TX HANDLER (Agent -> User) ---
-    // Handle WebSocket messages & Playback to txSession
+  setupWebSocketHandlers(session) {
+    const { websocket, sessionId } = session;
+
     const startPlayback = () => {
         session.isPlaying = true;
+        session.isAgentSpeaking = true;
+        session.peakAgentRMS = 0; // Reset peak for new utterance
+        session.playbackInterrupted = false;
+
         let offset = 0;
-        const CHUNK_SIZE = 320;
-        
+        const CHUNK_SIZE = 320; 
+        const PACKET_INTERVAL = 20;
+        const startTime = Date.now();
+        let packetCount = 0;
+
         const sendNextChunk = () => {
              if (session.isClosed) return;
 
              if (!session.audioBuffer || offset + CHUNK_SIZE > session.audioBuffer.length) {
+                 // Check if actually empty or just waiting for stream
                  if (session.audioBuffer && offset < session.audioBuffer.length) {
-                    session.audioBuffer = session.audioBuffer.slice(offset);
+                     session.audioBuffer = session.audioBuffer.slice(offset);
                  } else {
-                    session.audioBuffer = Buffer.alloc(0);
+                     session.audioBuffer = Buffer.alloc(0);
                  }
                  
                  if (session.audioBuffer.length === 0) {
                      session.isPlaying = false;
+                     session.isAgentSpeaking = false;
                      return;
                  }
                  
                  session.isPlaying = false;
+                 session.isAgentSpeaking = false;
                  return;
              }
 
              const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
-             // Send to TX Session (User hears this)
-             this.rtpServer.sendAudio(session.txSessionId, chunk);
+             
+             // TRACK OUTPUT VOLUME
+             const outputRMS = calculateRMS(chunk);
+             session.currentAgentRMS = outputRMS;
+             if (outputRMS > session.peakAgentRMS) session.peakAgentRMS = outputRMS;
+             
+             this.rtpServer.sendAudio(session.sessionId, chunk);
+             
+             // State Update
+             session.lastAgentAudioTime = Date.now();
              
              offset += CHUNK_SIZE;
-             setTimeout(sendNextChunk, 20); // 20ms pacing
+             packetCount++;
+
+             const elapsed = Date.now() - startTime;
+             const targetTime = packetCount * PACKET_INTERVAL;
+             const delay = Math.max(0, targetTime - elapsed);
+             
+             setTimeout(sendNextChunk, delay);
         };
 
         sendNextChunk();
@@ -215,93 +250,54 @@ class RTPBridge {
       try {
         const message = JSON.parse(data);
 
-        // Conv ID update
         if (message.conversation_initiation_metadata_event?.conversation_id) {
             session.conversationId = message.conversation_initiation_metadata_event.conversation_id;
         }
 
-        // Incoming Audio from Agent
         if (message.audio_event?.audio_base_64) {
-            const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
-            let pcm8k; 
+             const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
+             let pcm8k; 
 
-            if (audioMode === 'ulaw_8000') {
-                const ulawData = Buffer.from(message.audio_event.audio_base_64, 'base64');
-                const decoded = alawmulaw.mulaw.decode(ulawData);
-                pcm8k = Buffer.from(decoded.buffer);
-            } else {
-                const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
-                pcm8k = downsample16to8(pcm16k);
-            }
+             if (audioMode === 'ulaw_8000') {
+                 const ulawData = Buffer.from(message.audio_event.audio_base_64, 'base64');
+                 const decoded = alawmulaw.mulaw.decode(ulawData);
+                 pcm8k = Buffer.from(decoded.buffer);
+             } else {
+                 const pcm16k = Buffer.from(message.audio_event.audio_base_64, 'base64');
+                 pcm8k = downsample16to8(pcm16k);
+             }
 
-            if (!session.audioBuffer) session.audioBuffer = Buffer.alloc(0);
-            session.audioBuffer = Buffer.concat([session.audioBuffer, pcm8k]);
-            
-            if (!session.isPlaying) startPlayback();
+             if (!session.audioBuffer) session.audioBuffer = Buffer.alloc(0);
+             session.audioBuffer = Buffer.concat([session.audioBuffer, pcm8k]);
+             
+             if (!session.isPlaying) startPlayback();
         }
-        
-        if (message.agent_response_event?.agent_response) {
-            logger.info('Agent Response:', { text: message.agent_response_event.agent_response });
-        }
-
       } catch (e) {
-          logger.error('WS Message Error', { error: e.message });
+          logger.error('WS Error', { error: e.message });
       }
     });
     
-    websocket.on('close', () => logger.warn('ElevenLabs WS Closed', { sessionId: txSessionId }));
+    websocket.on('close', () => logger.warn('ElevenLabs WS Closed', { sessionId }));
   }
 
-  /**
-   * Cleanup session
-   */
   async cleanup(channelId) {
-    logger.info('Cleaning up Split-Path bridge', { channelId });
-
-    // Find session by any channel ID
-    let targetSession = null;
-    for (const session of this.activeSessions.values()) {
-        if (session.userChannel.id === channelId || 
-            session.txChannel.id === channelId || 
-            session.rxChannel.id === channelId ||
-            (session.snoopChannel && session.snoopChannel.id === channelId)) {
-            targetSession = session;
-            break;
-        }
-    }
-
-    if (targetSession) {
-        // Close WS
-        if (targetSession.websocket) targetSession.websocket.close();
-        if (targetSession.conversationId) endConversation(targetSession.conversationId);
-
-        // Close RTP
-        this.rtpServer.closeSession(targetSession.txSessionId);
-        this.rtpServer.closeSession(targetSession.rxSessionId);
-        
-        targetSession.isClosed = true;
-
-        // Cleanup Map
-        this.activeSessions.delete(targetSession.txSessionId);
-        this.activeSessions.delete(targetSession.rxSessionId);
-
-        // Channels and bridges will be cleaned up by Asterisk when User hangs up,
-        // but robustly we should probably hangup our created channels.
-        try { await targetSession.txChannel.hangup(); } catch(e) {}
-        try { await targetSession.rxChannel.hangup(); } catch(e) {}
-        try { await targetSession.snoopChannel.hangup(); } catch(e) {}
-        try { await targetSession.mediaBridge.destroy(); } catch(e) {}
-        try { await targetSession.snoopBridge.destroy(); } catch(e) {}
-        
-        logger.success('Split-Path Cleaned Up');
+    logger.info('Cleaning up Bridge', { channelId });
+    for (const [sessionId, session] of this.activeSessions.entries()) {
+      if (session.userChannel.id === channelId || session.externalMediaChannel.id === channelId) {
+         if (session.websocket) session.websocket.close();
+         if (session.conversationId) endConversation(session.conversationId);
+         this.rtpServer.closeSession(sessionId);
+         this.activeSessions.delete(sessionId);
+         session.isClosed = true;
+         // Channels usually auto-hangup
+         try { await session.mediaBridge.destroy(); } catch(e) {}
+         return;
+      }
     }
   }
 
   async shutdown() {
-      // Basic shutdown implementation
-      logger.info('Shutting down RTP Bridge');
       this.activeSessions.clear();
-      // Implementation omitted for brevity in snippet but logic allows clean exit
   }
 }
 
