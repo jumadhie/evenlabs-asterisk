@@ -29,6 +29,21 @@ function downsample16to8(pcm16k) {
 }
 
 /**
+ * Calculate RMS (Root Mean Square) of PCM audio buffer
+ * @param {Buffer} pcmBuffer - 16-bit PCM audio
+ * @returns {number} - RMS amplitude
+ */
+function calculateRMS(pcmBuffer) {
+    let sum = 0;
+    for (let i = 0; i < pcmBuffer.length; i += 2) {
+        if (i + 1 >= pcmBuffer.length) break;
+        const sample = pcmBuffer.readInt16LE(i);
+        sum += sample * sample;
+    }
+    return Math.sqrt(sum / (pcmBuffer.length / 2));
+}
+
+/**
  * RTP Bridge for ElevenLabs Conversational AI
  * Handles bidirectional audio streaming via RTP ExternalMedia
  */
@@ -107,6 +122,7 @@ class RTPBridge {
         lastAgentAudioEnd: 0, // Timestamp when playback queue emptied
         playbackInterrupted: false, // Flag to track interruptions
         audioBuffer: Buffer.alloc(0), // Buffer for agent audio
+        outputHistory: [], // Rolling buffer of {timestamp, rms} for echo analysis
         isClosed: false, // Track if session is closed
       };
 
@@ -143,25 +159,59 @@ class RTPBridge {
     this.rtpServer.on('audio', (sid, pcm8k, rawPayload, rms) => {
       if (sid !== sessionId) return;
 
-      // === FIX 1: Echo Delay Protection ===
-      // When we send audio TO the user, it travels through the mixing bridge
-      // and can be captured back as "user input" creating a feedback loop.
-      // Block audio for ECHO_DELAY_MS after last agent audio to prevent this.
-      // INCREASED to 800ms to account for network latency + jitter buffer
-      const ECHO_DELAY_MS = parseInt(process.env.ECHO_DELAY_MS) || 800;
-      const timeSinceAgentAudio = Date.now() - (session.lastAgentAudioTime || 0);
-      const timeSincePlaybackEnd = Date.now() - (session.lastAgentAudioEnd || 0);
+      // === FIX 1: Adaptive Echo Suppression (Smart AEC) ===
+      // Instead of hardcoded blocking, we analyze the correlation between 
+      // recent agent output volume and current input volume.
       
-      // Block if agent is speaking OR was speaking recently (within ECHO_DELAY_MS)
-      if (timeSinceAgentAudio < ECHO_DELAY_MS || timeSincePlaybackEnd < ECHO_DELAY_MS) {
-        logger.debug('Blocking potential echo audio', {
-          sessionId,
-          timeSinceAgentAudio,
-          timeSincePlaybackEnd,
-          threshold: ECHO_DELAY_MS,
-        });
-        return; // Skip - this is likely echoed agent audio
+      const now = Date.now();
+      
+      // 1. Cleanup old history (keep last 1000ms)
+      if (session.outputHistory.length > 50) { // Optimization: don't filter every packet
+          session.outputHistory = session.outputHistory.filter(h => now - h.timestamp < 1000);
       }
+
+      // 2. Find max agent volume in the "echo window"
+      // Echo usually arrives 50ms - 500ms after output
+      const ECHO_MIN_DELAY = 20;
+      const ECHO_WINDOW = 800;
+      
+      const relevantOutput = session.outputHistory.filter(h => {
+          const age = now - h.timestamp;
+          return age > ECHO_MIN_DELAY && age < ECHO_WINDOW;
+      });
+      
+      const maxAgentRMS = relevantOutput.reduce((max, h) => Math.max(max, h.rms), 0);
+      
+      // 3. Calculate Dynamic Threshold
+      // If Agent is loud, we expect loud echo. Threshold attempts to be just above the echo level.
+      // ECHO_FACTOR: How much of the output signal returns as echo? (0.5 = 50%)
+      const ECHO_FACTOR = parseFloat(process.env.ECHO_FACTOR) || 0.4; 
+      const NOISE_FLOOR = parseInt(process.env.SILENCE_THRESHOLD) || 200;
+      
+      const dynamicThreshold = (maxAgentRMS * ECHO_FACTOR) + NOISE_FLOOR;
+      
+      // 4. Smart Block
+      if (rms < dynamicThreshold) {
+           // This is likely echo or background noise
+           if (maxAgentRMS > 500) {
+               logger.debug('SUPPRESSED ECHO', { 
+                   sid, 
+                   inRMS: Math.round(rms), 
+                   agentRMS: Math.round(maxAgentRMS), 
+                   thresh: Math.round(dynamicThreshold) 
+               });
+           }
+           return; 
+      }
+      
+      // If we pass the threshold, it is likely USER INTERRUPT.
+      // But we still apply a small safety margin if agent is VERY loud
+      if (session.isPlaying && maxAgentRMS > 4000 && rms < 3000) {
+          // Double safety for loud agent segments
+           return;
+      }
+
+      // === FIX 2: Playback State Lock (Modified for Adaptive Logic) ===
 
       // === FIX 2: Playback State Lock ===
       // Don't send audio while we're actively playing agent response
@@ -270,6 +320,16 @@ class RTPBridge {
              }
 
              const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
+             
+             // Calculate RMS for Adaptive Echo Cancellation
+             const outputRMS = calculateRMS(chunk);
+             if (session.outputHistory) {
+                 session.outputHistory.push({
+                     timestamp: Date.now(),
+                     rms: outputRMS
+                 });
+             }
+             
              rtpServer.sendAudio(session.sessionId, chunk);
              
              // === FIX: Track when agent audio was sent ===
