@@ -118,6 +118,9 @@ class RTPBridge {
         isAgentSpeaking: false,
         isPlaying: false, 
         lastAgentAudioTime: 0,
+        peakAgentRMS: 0, 
+        currentAgentRMS: 0,
+        playbackInterrupted: false,
         audioBuffer: Buffer.alloc(0),
         isClosed: false,
       };
@@ -155,26 +158,43 @@ class RTPBridge {
     this.rtpServer.on('audio', (sid, pcm8k, rawPayload, rms) => {
       if (sid !== sessionId) return;
 
-      // === ZERO-LATENCY STATE LOGIC ===
+      // === ZERO-LATENCY DYNAMIC GATE ===
       
       const audioMode = config.elevenlabs.audioMode || 'pcm_16000';
-      const DRAIN_TIME = 1000; // Increased to 1s to cover network latency
+      const ECHO_WINDOW = 1000; // 1 second echo tail protection
       
-      // 1. Check Output Drain (Echo Guard)
-      // If agent is speaking or just finished, we assume this input is echo.
-      if (session.isAgentSpeaking || (Date.now() - session.lastAgentAudioTime < DRAIN_TIME)) {
-          
-          // Barge-In Exception: Lower threshold for easier interruption
-          if (rms > 800) {
-              // INTERRUPT
-              session.audioBuffer = Buffer.alloc(0); // Clear agent buffer
-              session.isPlaying = false;
-              session.isAgentSpeaking = false;
-              // Pass through...
-          } else {
-              // BLOCK (Drop packet)
-              return;
-          }
+      // Calculate Dynamic Threshold
+      let referenceRMS = 0;
+      const timeSinceOutput = Date.now() - session.lastAgentAudioTime;
+
+      if (session.isAgentSpeaking) {
+          // While speaking, use current volume (or peak to be safe)
+          referenceRMS = Math.max(session.currentAgentRMS, session.peakAgentRMS);
+      } else if (timeSinceOutput < ECHO_WINDOW) {
+          // In the echo tail window, maintain the peak threshold
+          // This ensures delayed loud echoes are still blocked
+          referenceRMS = session.peakAgentRMS;
+      } else {
+          // Safe silence
+          referenceRMS = 0;
+      }
+
+      // Base threshold 800 (silence), max threshold proportional to Echo
+      // Echo Factor 0.8: We expect echo to be weaker than original, but we set threshold high to be safe.
+      const dynamicThreshold = Math.max(800, referenceRMS * 0.8);
+
+      if (rms < dynamicThreshold) {
+           return; // Block Echo/Silence
+      }
+      
+      // If we are here, it's LOUD enough to be user input (Barge-In)
+      if (session.isAgentSpeaking || timeSinceOutput < ECHO_WINDOW) {
+          // Logic for interruption
+          session.audioBuffer = Buffer.alloc(0);
+          session.isPlaying = false;
+          session.isAgentSpeaking = false;
+          session.playbackInterrupted = true;
+          // outputHistory is removed, no need to clear
       }
 
       // 2. Silence Filter
@@ -203,6 +223,7 @@ class RTPBridge {
     const startPlayback = (session, rtpServer) => {
         session.isPlaying = true;
         session.isAgentSpeaking = true;
+        session.peakAgentRMS = 0; // Reset peak for new utterance
         
         let offset = 0;
         let packetCount = 0;
@@ -233,6 +254,12 @@ class RTPBridge {
              }
 
              const chunk = session.audioBuffer.slice(offset, offset + CHUNK_SIZE);
+             
+             // Dynamic Threshold Update
+             const chunkRMS = calculateRMS(chunk);
+             session.currentAgentRMS = chunkRMS;
+             session.peakAgentRMS = Math.max(session.peakAgentRMS, chunkRMS);
+
              rtpServer.sendAudio(session.sessionId, chunk);
              
              // Update State
